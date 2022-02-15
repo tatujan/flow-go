@@ -1,9 +1,14 @@
 package computer_test
 
 import (
+	"bufio"
 	"context"
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"math/rand"
+	"os"
+	"reflect"
 	"testing"
 
 	"github.com/onflow/cadence"
@@ -25,7 +30,6 @@ import (
 	"github.com/onflow/flow-go/engine/execution/state/delta"
 	"github.com/onflow/flow-go/engine/execution/testutil"
 	"github.com/onflow/flow-go/fvm"
-	fvmErrors "github.com/onflow/flow-go/fvm/errors"
 	"github.com/onflow/flow-go/fvm/programs"
 	"github.com/onflow/flow-go/fvm/state"
 	"github.com/onflow/flow-go/fvm/systemcontracts"
@@ -57,21 +61,21 @@ func TestBlockExecutor_ExecuteBlock(t *testing.T) {
 			}).
 			Times(2 + 1) // 2 txs in collection + system chunk
 
-		committer := new(computermock.ViewCommitter)
-		committer.On("CommitView", mock.Anything, mock.Anything).
+		comm := new(computermock.ViewCommitter)
+		comm.On("CommitView", mock.Anything, mock.Anything).
 			Return(nil, nil, nil, nil).
 			Times(2 + 1) // 2 txs in collection + system chunk
 
-		metrics := new(modulemock.ExecutionMetrics)
-		metrics.On("ExecutionCollectionExecuted", mock.Anything, mock.Anything, mock.Anything).
+		metr := new(modulemock.ExecutionMetrics)
+		metr.On("ExecutionCollectionExecuted", mock.Anything, mock.Anything, mock.Anything).
 			Return(nil).
 			Times(2) // 1 collection + system collection
 
-		metrics.On("ExecutionTransactionExecuted", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		metr.On("ExecutionTransactionExecuted", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 			Return(nil).
 			Times(2 + 1) // 2 txs in collection + system chunk tx
 
-		exe, err := computer.NewBlockComputer(vm, execCtx, metrics, trace.NewNoopTracer(), zerolog.Nop(), committer)
+		exe, err := computer.NewBlockComputer(vm, execCtx, metr, trace.NewNoopTracer(), zerolog.Nop(), comm)
 		require.NoError(t, err)
 
 		// create a block with 1 collection with 2 transactions
@@ -98,20 +102,20 @@ func TestBlockExecutor_ExecuteBlock(t *testing.T) {
 		)
 
 		vm := new(computermock.VirtualMachine)
-		committer := new(computermock.ViewCommitter)
+		comm := new(computermock.ViewCommitter)
 
-		exe, err := computer.NewBlockComputer(vm, execCtx, metrics.NewNoopCollector(), trace.NewNoopTracer(), zerolog.Nop(), committer)
+		exe, err := computer.NewBlockComputer(vm, execCtx, metrics.NewNoopCollector(), trace.NewNoopTracer(), zerolog.Nop(), comm)
 		require.NoError(t, err)
 
 		// create an empty block
 		block := generateBlock(0, 0, rag)
-		programs := programs.NewEmptyPrograms()
+		prog := programs.NewEmptyPrograms()
 
-		vm.On("Run", mock.Anything, mock.Anything, mock.Anything, programs).
+		vm.On("Run", mock.Anything, mock.Anything, mock.Anything, prog).
 			Return(nil).
 			Once() // just system chunk
 
-		committer.On("CommitView", mock.Anything, mock.Anything).
+		comm.On("CommitView", mock.Anything, mock.Anything).
 			Return(nil, nil, nil, nil).
 			Once() // just system chunk
 
@@ -119,7 +123,7 @@ func TestBlockExecutor_ExecuteBlock(t *testing.T) {
 			return nil, nil
 		})
 
-		result, err := exe.ExecuteBlock(context.Background(), block, view, programs)
+		result, err := exe.ExecuteBlock(context.Background(), block, view, prog)
 		assert.NoError(t, err)
 		assert.Len(t, result.StateSnapshots, 1)
 		assert.Len(t, result.TrieUpdates, 1)
@@ -195,9 +199,16 @@ func TestBlockExecutor_ExecuteBlock(t *testing.T) {
 		execCtx := fvm.NewContext(zerolog.Nop())
 
 		vm := new(computermock.VirtualMachine)
-		committer := new(computermock.ViewCommitter)
+		comm := new(computermock.ViewCommitter)
 
-		exe, err := computer.NewBlockComputer(vm, execCtx, metrics.NewNoopCollector(), trace.NewNoopTracer(), zerolog.Nop(), committer)
+		// OCC test attempt to change logger and tracer
+		logFilename := "testLogFile"
+		f, err := os.OpenFile(logFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		logger := zerolog.New(f)
+		zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+		//tracer, err := trace.NewTracer(logger, "test", "test", 2)
+
+		exe, err := computer.NewBlockComputer(vm, execCtx, metrics.NewNoopCollector(), trace.NewNoopTracer(), logger, comm)
 		require.NoError(t, err)
 
 		collectionCount := 2
@@ -209,20 +220,20 @@ func TestBlockExecutor_ExecuteBlock(t *testing.T) {
 
 		// create a block with 2 collections with 2 transactions each
 		block := generateBlock(collectionCount, transactionsPerCollection, rag)
-		programs := programs.NewEmptyPrograms()
+		prog := programs.NewEmptyPrograms()
 
-		vm.On("Run", mock.Anything, mock.Anything, mock.Anything, programs).
+		vm.On("Run", mock.Anything, mock.Anything, mock.Anything, prog).
 			Run(func(args mock.Arguments) {
 				tx := args[1].(*fvm.TransactionProcedure)
 
-				tx.Err = fvmErrors.NewInvalidAddressErrorf(flow.Address{}, "no payer address provided")
+				//tx.Err = fvmErrors.NewInvalidAddressErrorf(flow.Address{}, "no payer address provided")
 				// create dummy events
 				tx.Events = generateEvents(eventsPerTransaction, tx.TxIndex)
 			}).
 			Return(nil).
 			Times(totalTransactionCount)
 
-		committer.On("CommitView", mock.Anything, mock.Anything).
+		comm.On("CommitView", mock.Anything, mock.Anything).
 			Return(nil, nil, nil, nil).
 			Times(collectionCount + 1)
 
@@ -230,7 +241,7 @@ func TestBlockExecutor_ExecuteBlock(t *testing.T) {
 			return nil, nil
 		})
 
-		result, err := exe.ExecuteBlock(context.Background(), block, view, programs)
+		result, err := exe.ExecuteBlock(context.Background(), block, view, prog)
 		assert.NoError(t, err)
 
 		// chunk count should match collection count
@@ -265,7 +276,7 @@ func TestBlockExecutor_ExecuteBlock(t *testing.T) {
 			for _, t := range c.Transactions {
 				txResult := flow.TransactionResult{
 					TransactionID: t.ID(),
-					ErrorMessage:  fvmErrors.NewInvalidAddressErrorf(flow.Address{}, "no payer address provided").Error(),
+					//ErrorMessage:  fvmErrors.NewInvalidAddressErrorf(flow.Address{}, "no payer address provided").Error(),
 				}
 				expectedResults = append(expectedResults, txResult)
 			}
@@ -275,6 +286,13 @@ func TestBlockExecutor_ExecuteBlock(t *testing.T) {
 		assertEventHashesMatch(t, collectionCount+1, result)
 
 		vm.AssertExpectations(t)
+
+		// export the log file to csv
+		err = convertJSONToCSV(logFilename, "csvLog.csv")
+		if err != nil {
+			// do nothing
+		}
+
 	})
 
 	t.Run("service events are emitted", func(t *testing.T) {
@@ -626,28 +644,28 @@ func Test_ExecutingSystemCollection(t *testing.T) {
 		fvm.WithBlocks(&fvm.NoopBlockFinder{}),
 	)
 
-	runtime := fvm.NewInterpreterRuntime()
-	vm := fvm.NewVirtualMachine(runtime)
+	rntime := fvm.NewInterpreterRuntime()
+	vm := fvm.NewVirtualMachine(rntime)
 
 	rag := &RandomAddressGenerator{}
 
 	ledger := testutil.RootBootstrappedLedger(vm, execCtx)
 
-	committer := new(computermock.ViewCommitter)
-	committer.On("CommitView", mock.Anything, mock.Anything).
+	comm := new(computermock.ViewCommitter)
+	comm.On("CommitView", mock.Anything, mock.Anything).
 		Return(nil, nil, nil, nil).
 		Times(1) // only system chunk
 
-	metrics := new(modulemock.ExecutionMetrics)
-	metrics.On("ExecutionCollectionExecuted", mock.Anything, mock.Anything, mock.Anything).
+	metr := new(modulemock.ExecutionMetrics)
+	metr.On("ExecutionCollectionExecuted", mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).
 		Times(1) // system collection
 
-	metrics.On("ExecutionTransactionExecuted", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	metr.On("ExecutionTransactionExecuted", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).
 		Times(1) // system chunk tx
 
-	exe, err := computer.NewBlockComputer(vm, execCtx, metrics, trace.NewNoopTracer(), zerolog.Nop(), committer)
+	exe, err := computer.NewBlockComputer(vm, execCtx, metr, trace.NewNoopTracer(), zerolog.Nop(), comm)
 	require.NoError(t, err)
 
 	// create empty block, it will have system collection attached while executing
@@ -662,7 +680,7 @@ func Test_ExecutingSystemCollection(t *testing.T) {
 
 	assert.Empty(t, result.TransactionResults[0].ErrorMessage)
 
-	committer.AssertExpectations(t)
+	comm.AssertExpectations(t)
 }
 
 func generateBlock(collectionCount, transactionCount int, addressGenerator flow.AddressGenerator) *entity.ExecutableBlock {
@@ -708,6 +726,7 @@ func generateCollection(transactionCount int, addressGenerator flow.AddressGener
 			panic(fmt.Errorf("cannot generate next address in test: %w", err))
 		}
 		txBody := &flow.TransactionBody{
+			// OCC Note: txConstruction here
 			Payer:  nextAddress, // a unique payer for each tx to generate a unique id
 			Script: []byte("transaction { execute {} }"),
 		}
@@ -735,4 +754,116 @@ func generateEvents(eventCount int, txIndex uint32) []flow.Event {
 		events[i] = event
 	}
 	return events
+}
+
+func convertJSONToCSV(source, destination string) error {
+	// struct with all possible fields for log messages
+	type TraceOutput struct {
+		Level                string `json:"level"`
+		CollectionID         string `json:"collection_id"`
+		NumberOfTransactions int64  `json:"numberOfTransactions"`
+		BlockID              string `json:"block_id"`
+		TxID                 string `json:"tx_id"`
+		TraceID              string `json:"traceID"`
+		TxIndex              int64  `json:"tx_index"`
+		Height               int64  `json:"height"`
+		SystemChunk          bool   `json:"system_chunk"`
+		ParallelExecution    bool   `json:"parallel_execution"`
+		ComputationUsed      int64  `json:"computation_used"`
+		TimeSpentInNS        int64  `json:"timeSpentInNS"`
+		Time                 int64  `json:"time"`
+		Message              string `json:"message"`
+	}
+
+	// open file containing logs in JSON format
+	sourceFile, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+
+	// split file into lines (each line is a JSON object)
+	scanner := bufio.NewScanner(sourceFile)
+	scanner.Split(bufio.ScanLines)
+
+	// unmarshall each line into a TraceOutput struct
+	var traceOutputs []TraceOutput
+	for scanner.Scan() {
+		// default values of trace output
+		traceOutput := TraceOutput{
+			Level:                "none",
+			CollectionID:         "none",
+			NumberOfTransactions: -1,
+			BlockID:              "none",
+			TxID:                 "none",
+			TraceID:              "none",
+			TxIndex:              -1,
+			Height:               -1,
+			SystemChunk:          false,
+			ParallelExecution:    false,
+			ComputationUsed:      -1,
+			TimeSpentInNS:        -1,
+			Time:                 -1,
+			Message:              "none",
+		}
+		bytes := scanner.Bytes()
+		err := json.Unmarshal(bytes, &traceOutput)
+		if err != nil {
+			return err
+		}
+		traceOutputs = append(traceOutputs, traceOutput)
+	}
+
+	// set up csv writer
+	outputFile, err := os.Create(destination)
+	if err != nil {
+		return err
+	}
+	writer := csv.NewWriter(outputFile)
+	defer writer.Flush()
+
+	// use reflection to produce csv header and get struct field values
+	r := reflect.ValueOf(TraceOutput{})
+	typeOfTO := r.Type()
+	numFields := r.NumField()
+	numRecords := len(traceOutputs)
+
+	// generate the csv headers from struct fields
+	var header []string
+	csvData := make([][]string, numRecords)
+	for col := range csvData {
+		csvData[col] = make([]string, numFields)
+	}
+
+	// iterate over each field, aggregate log data per field
+	for i := 0; i < numFields; i++ {
+		// generate the csv header from field names as we iterate
+		header = append(header, typeOfTO.Field(i).Name)
+		for j := 0; j < numRecords; j++ {
+			value := reflect.ValueOf(traceOutputs[j]).Field(i).Interface()
+			strValue := fmt.Sprintf("%v", value)
+			csvData[j][i] = strValue
+		}
+	}
+	// write header to csv file
+	if err := writer.Write(header); err != nil {
+		return err
+	}
+	// write all log data to csv
+	for col := range csvData {
+		if err := writer.Write(csvData[col]); err != nil {
+			return err
+		}
+	}
+	if err := outputFile.Close(); err != nil {
+		return err
+	}
+	if err := sourceFile.Close(); err != nil {
+		return err
+	}
+	// remove original json log file
+	if err := os.Remove(source); err != nil {
+		return err
+	}
+
+	return nil
 }

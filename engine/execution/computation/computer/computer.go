@@ -309,11 +309,11 @@ func (e *blockComputer) executeCollection(
 		}
 	}
 	res.AddStateSnapshot(collectionView.(*delta.View).Interactions())
-	e.log.Info().Str("collectionID", collection.Guarantee.CollectionID.String()).
+	e.log.Info().Str("collection_id", collection.Guarantee.CollectionID.String()).
 		Str("referenceBlockID", collection.Guarantee.ReferenceBlockID.String()).
-		Hex("blockID", logging.Entity(blockCtx.BlockHeader)).
+		Hex("block_id", logging.Entity(blockCtx.BlockHeader)).
 		Int("numberOfTransactions", len(collection.Transactions)).
-		Int64("timeSpentInMS", time.Since(startedAt).Milliseconds()).
+		Int64("timeSpentInNS", time.Since(startedAt).Nanoseconds()).
 		Msg("collection executed")
 
 	e.metrics.ExecutionCollectionExecuted(time.Since(startedAt), res.ComputationUsed-computationUsedUpToNow, len(collection.Transactions))
@@ -414,8 +414,10 @@ func (e *blockComputer) executeTransaction(
 		Hex("tx_id", txResult.TransactionID[:]).
 		Str("block_id", res.ExecutableBlock.ID().String()).
 		Str("traceID", traceID).
+		Bool("parallel_execution", false).
 		Uint64("computation_used", txResult.ComputationUsed).
-		Int64("timeSpentInMS", time.Since(startedAt).Milliseconds()).
+		Int64("timeSpentInNS", time.Since(startedAt).Nanoseconds()).
+		Timestamp().
 		Logger()
 
 	if tx.Err != nil {
