@@ -1,8 +1,11 @@
 package computer_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"github.com/onflow/flow-go/engine/execution/computation/computer"
 	computermock "github.com/onflow/flow-go/engine/execution/computation/computer/mock"
@@ -17,6 +20,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"math/rand"
+	"os"
+	"reflect"
 	"testing"
 
 	"github.com/onflow/flow-go/fvm"
@@ -225,4 +230,116 @@ func (e *CustomAddressGenerator) Bytes() []byte {
 
 func (e *CustomAddressGenerator) AddressCount() uint64 {
 	panic("not implemented")
+}
+
+func convertJSONToCSV(source, destination string) error {
+	// struct with all possible fields for log messages
+	type TraceOutput struct {
+		Level                string `json:"level"`
+		CollectionID         string `json:"collection_id"`
+		NumberOfTransactions int64  `json:"numberOfTransactions"`
+		BlockID              string `json:"block_id"`
+		TxID                 string `json:"tx_id"`
+		TraceID              string `json:"traceID"`
+		TxIndex              int64  `json:"tx_index"`
+		Height               int64  `json:"height"`
+		SystemChunk          bool   `json:"system_chunk"`
+		ParallelExecution    bool   `json:"parallel_execution"`
+		ComputationUsed      int64  `json:"computation_used"`
+		TimeSpentInNS        int64  `json:"timeSpentInNS"`
+		Time                 int64  `json:"time"`
+		Message              string `json:"message"`
+	}
+
+	// open file containing logs in JSON format
+	sourceFile, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+
+	// split file into lines (each line is a JSON object)
+	scanner := bufio.NewScanner(sourceFile)
+	scanner.Split(bufio.ScanLines)
+
+	// unmarshall each line into a TraceOutput struct
+	var traceOutputs []TraceOutput
+	for scanner.Scan() {
+		// default values of trace output
+		traceOutput := TraceOutput{
+			Level:                "none",
+			CollectionID:         "none",
+			NumberOfTransactions: -1,
+			BlockID:              "none",
+			TxID:                 "none",
+			TraceID:              "none",
+			TxIndex:              -1,
+			Height:               -1,
+			SystemChunk:          false,
+			ParallelExecution:    false,
+			ComputationUsed:      -1,
+			TimeSpentInNS:        -1,
+			Time:                 -1,
+			Message:              "none",
+		}
+		bytes := scanner.Bytes()
+		err := json.Unmarshal(bytes, &traceOutput)
+		if err != nil {
+			return err
+		}
+		traceOutputs = append(traceOutputs, traceOutput)
+	}
+
+	// set up csv writer
+	outputFile, err := os.Create(destination)
+	if err != nil {
+		return err
+	}
+	writer := csv.NewWriter(outputFile)
+	defer writer.Flush()
+
+	// use reflection to produce csv header and get struct field values
+	r := reflect.ValueOf(TraceOutput{})
+	typeOfTO := r.Type()
+	numFields := r.NumField()
+	numRecords := len(traceOutputs)
+
+	// generate the csv headers from struct fields
+	var header []string
+	csvData := make([][]string, numRecords)
+	for col := range csvData {
+		csvData[col] = make([]string, numFields)
+	}
+
+	// iterate over each field, aggregate log data per field
+	for i := 0; i < numFields; i++ {
+		// generate the csv header from field names as we iterate
+		header = append(header, typeOfTO.Field(i).Name)
+		for j := 0; j < numRecords; j++ {
+			value := reflect.ValueOf(traceOutputs[j]).Field(i).Interface()
+			strValue := fmt.Sprintf("%v", value)
+			csvData[j][i] = strValue
+		}
+	}
+	// write header to csv file
+	if err := writer.Write(header); err != nil {
+		return err
+	}
+	// write all log data to csv
+	for col := range csvData {
+		if err := writer.Write(csvData[col]); err != nil {
+			return err
+		}
+	}
+	if err := outputFile.Close(); err != nil {
+		return err
+	}
+	if err := sourceFile.Close(); err != nil {
+		return err
+	}
+	// remove original json log file
+	if err := os.Remove(source); err != nil {
+		return err
+	}
+
+	return nil
 }
