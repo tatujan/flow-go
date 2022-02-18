@@ -204,7 +204,11 @@ func (e *blockComputer) executeBlock(
 	}
 
 	// executing system chunk
-	e.log.Debug().Hex("block_id", logging.Entity(block)).Msg("executing system chunk")
+	e.log.Debug().
+		Hex("block_id", logging.Entity(block)).
+		Bool("system_chunk", true).
+		Msg("executing system chunk")
+
 	colView := stateView.NewChild()
 	_, err = e.executeSystemCollection(blockSpan, collectionIndex, txIndex, systemChunkCtx, colView, programs, res)
 	if err != nil {
@@ -247,7 +251,7 @@ func (e *blockComputer) executeSystemCollection(
 		return txIndex, fmt.Errorf("could not get system chunk transaction: %w", err)
 	}
 
-	err = e.executeTransaction(tx, colSpan, collectionView, programs, systemChunkCtx, collectionIndex, txIndex, res, true, `string`)
+	err = e.executeTransaction(tx, colSpan, collectionView, programs, systemChunkCtx, collectionIndex, txIndex, res, true, `system collection`)
 	txIndex++
 
 	if err != nil {
@@ -316,6 +320,7 @@ func (e *blockComputer) executeCollection(
 		Hex("block_id", logging.Entity(blockCtx.BlockHeader)).
 		Int("numberOfTransactions", len(collection.Transactions)).
 		Int64("timeSpentInNS", time.Since(startedAt).Nanoseconds()).
+		Timestamp().
 		Msg("collection executed")
 
 	e.metrics.ExecutionCollectionExecuted(time.Since(startedAt), res.ComputationUsed-computationUsedUpToNow, len(collection.Transactions))
@@ -419,6 +424,7 @@ func (e *blockComputer) executeTransaction(
 		Hex("tx_id", txResult.TransactionID[:]).
 		Str("block_id", res.ExecutableBlock.ID().String()).
 		Str("traceID", traceID).
+		Bool("system_chunk", isSystemChunk).
 		Bool("parallel_execution", false).
 		Uint64("computation_used", txResult.ComputationUsed).
 		Int64("timeSpentInNS", time.Since(startedAt).Nanoseconds()).

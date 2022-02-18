@@ -10,22 +10,22 @@ import (
 	"github.com/onflow/flow-go/engine/execution/computation/computer"
 	computermock "github.com/onflow/flow-go/engine/execution/computation/computer/mock"
 	"github.com/onflow/flow-go/engine/execution/state/delta"
+	"github.com/onflow/flow-go/fvm"
 	"github.com/onflow/flow-go/fvm/programs"
 	"github.com/onflow/flow-go/model/flow"
 	"github.com/onflow/flow-go/module/mempool/entity"
 	modulemock "github.com/onflow/flow-go/module/mock"
 	"github.com/onflow/flow-go/module/trace"
 	"github.com/onflow/flow-go/utils/unittest"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"math/rand"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
-
-	"github.com/onflow/flow-go/fvm"
-	"github.com/rs/zerolog"
 )
 
 const (
@@ -111,11 +111,28 @@ func TestBlockExecutor_CustomBlock(t *testing.T) {
 		assertEventHashesMatch(t, numCol+1, result)
 		vm.AssertExpectations(t)
 
-		//export the log file to csv
-		err = convertJSONToCSV(logFilename, csvFilename)
+		// open file containing logs in JSON format
+		sourceFile, err := os.Open(logFilename)
+		if err != nil {
+			// do nothing?
+		}
+		// create csv file
+		outputFile, err := os.Create(csvFilename)
+		if err != nil {
+			// do nothing?
+		}
+		// convert the JSON logs to CSV file
+		lineswritten, err := convertJSONToCSV(sourceFile, outputFile)
 		if err != nil {
 			// do nothing
 		}
+
+		outputFile.Close()
+		sourceFile.Close()
+		// remove original json log file
+		os.Remove(logFilename)
+		expectedLines := numCol*numTxPerCol + numCol + 1 // +1 for system tx
+		assert.Equal(t, lineswritten, expectedLines)
 	})
 }
 
@@ -245,7 +262,8 @@ func (e *CustomAddressGenerator) AddressCount() uint64 {
 	panic("not implemented")
 }
 
-func convertJSONToCSV(source, destination string) error {
+func convertJSONToCSV(sourceFile *os.File, outputFile *os.File) (int, error) {
+	linesWritten := 0
 	// struct with all possible fields for log messages
 	type TraceOutput struct {
 		Level                string `json:"level"`
@@ -262,12 +280,6 @@ func convertJSONToCSV(source, destination string) error {
 		TimeSpentInNS        int64  `json:"timeSpentInNS"`
 		Time                 int64  `json:"time"`
 		Message              string `json:"message"`
-	}
-
-	// open file containing logs in JSON format
-	sourceFile, err := os.Open(source)
-	if err != nil {
-		return err
 	}
 
 	// split file into lines (each line is a JSON object)
@@ -297,16 +309,11 @@ func convertJSONToCSV(source, destination string) error {
 		bytes := scanner.Bytes()
 		err := json.Unmarshal(bytes, &traceOutput)
 		if err != nil {
-			return err
+			return linesWritten, err
 		}
 		traceOutputs = append(traceOutputs, traceOutput)
 	}
 
-	// set up csv writer
-	outputFile, err := os.Create(destination)
-	if err != nil {
-		return err
-	}
 	writer := csv.NewWriter(outputFile)
 	defer writer.Flush()
 
@@ -335,24 +342,28 @@ func convertJSONToCSV(source, destination string) error {
 	}
 	// write header to csv file
 	if err := writer.Write(header); err != nil {
-		return err
+		return linesWritten, err
 	}
 	// write all log data to csv
-	for col := range csvData {
-		if err := writer.Write(csvData[col]); err != nil {
-			return err
+	for row := range csvData {
+		data := csvData[row]
+		// filter out all entries that do not have timing data
+		if !stringSliceContainsSubstring("executing", data) {
+			// write row to file
+			if err := writer.Write(data); err != nil {
+				return linesWritten, err
+			}
+			linesWritten++
 		}
 	}
-	if err := outputFile.Close(); err != nil {
-		return err
-	}
-	if err := sourceFile.Close(); err != nil {
-		return err
-	}
-	// remove original json log file
-	if err := os.Remove(source); err != nil {
-		return err
-	}
+	return linesWritten, nil
+}
 
-	return nil
+func stringSliceContainsSubstring(substring string, slice []string) bool {
+	for _, elem := range slice {
+		if strings.Contains(elem, substring) {
+			return true
+		}
+	}
+	return false
 }
