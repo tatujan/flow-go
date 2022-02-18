@@ -247,7 +247,7 @@ func (e *blockComputer) executeSystemCollection(
 		return txIndex, fmt.Errorf("could not get system chunk transaction: %w", err)
 	}
 
-	err = e.executeTransaction(tx, colSpan, collectionView, programs, systemChunkCtx, collectionIndex, txIndex, res, true)
+	err = e.executeTransaction(tx, colSpan, collectionView, programs, systemChunkCtx, collectionIndex, txIndex, res, true, `string`)
 	txIndex++
 
 	if err != nil {
@@ -283,6 +283,8 @@ func (e *blockComputer) executeCollection(
 	res *execution.ComputationResult,
 ) (uint32, error) {
 
+	collectionID := collection.Guarantee.CollectionID.String()
+
 	e.log.Debug().
 		Hex("block_id", logging.Entity(blockCtx.BlockHeader)).
 		Hex("collection_id", logging.Entity(collection.Guarantee)).
@@ -295,25 +297,25 @@ func (e *blockComputer) executeCollection(
 	defer func() {
 		colSpan.SetTag("collection.txCount", len(collection.Transactions))
 		colSpan.LogFields(
-			log.String("collection.hash", collection.Guarantee.CollectionID.String()),
+			log.String("collection.hash", collectionID),
 		)
 		colSpan.Finish()
 	}()
 
 	txCtx := fvm.NewContextFromParent(blockCtx, fvm.WithMetricsReporter(e.metrics), fvm.WithTracer(e.tracer))
 	for _, txBody := range collection.Transactions {
-		err := e.executeTransaction(txBody, colSpan, collectionView, programs, txCtx, collectionIndex, txIndex, res, false)
+		err := e.executeTransaction(txBody, colSpan, collectionView, programs, txCtx, collectionIndex, txIndex, res, false, collectionID)
 		txIndex++
 		if err != nil {
 			return txIndex, err
 		}
 	}
 	res.AddStateSnapshot(collectionView.(*delta.View).Interactions())
-	e.log.Info().Str("collectionID", collection.Guarantee.CollectionID.String()).
+	e.log.Info().Str("collection_id", collectionID).
 		Str("referenceBlockID", collection.Guarantee.ReferenceBlockID.String()).
-		Hex("blockID", logging.Entity(blockCtx.BlockHeader)).
+		Hex("block_id", logging.Entity(blockCtx.BlockHeader)).
 		Int("numberOfTransactions", len(collection.Transactions)).
-		Int64("timeSpentInMS", time.Since(startedAt).Milliseconds()).
+		Int64("timeSpentInNS", time.Since(startedAt).Nanoseconds()).
 		Msg("collection executed")
 
 	e.metrics.ExecutionCollectionExecuted(time.Since(startedAt), res.ComputationUsed-computationUsedUpToNow, len(collection.Transactions))
@@ -331,6 +333,7 @@ func (e *blockComputer) executeTransaction(
 	txIndex uint32,
 	res *execution.ComputationResult,
 	isSystemChunk bool,
+	collectionID string,
 ) error {
 	startedAt := time.Now()
 	txID := txBody.ID()
@@ -353,6 +356,7 @@ func (e *blockComputer) executeTransaction(
 	defer txInternalSpan.Finish()
 
 	e.log.Info().
+		Str("collection_id", collectionID).
 		Str("tx_id", txID.String()).
 		Uint32("tx_index", txIndex).
 		Str("block_id", res.ExecutableBlock.ID().String()).
@@ -411,11 +415,14 @@ func (e *blockComputer) executeTransaction(
 	res.AddComputationUsed(tx.ComputationUsed)
 
 	lg := e.log.With().
+		Str("collection_id", collectionID).
 		Hex("tx_id", txResult.TransactionID[:]).
 		Str("block_id", res.ExecutableBlock.ID().String()).
 		Str("traceID", traceID).
+		Bool("parallel_execution", false).
 		Uint64("computation_used", txResult.ComputationUsed).
-		Int64("timeSpentInMS", time.Since(startedAt).Milliseconds()).
+		Int64("timeSpentInNS", time.Since(startedAt).Nanoseconds()).
+		Timestamp().
 		Logger()
 
 	if tx.Err != nil {

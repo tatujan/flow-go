@@ -83,7 +83,14 @@ func TestBlockExecutor_CustomBlock(t *testing.T) {
 			Return(nil).
 			Times(numCol*numTxPerCol + 1)
 
-		exe, err := computer.NewBlockComputer(vm, execCtx, metrics, trace.NewNoopTracer(), zerolog.Nop(), committer)
+		// Logging to CSV setup
+		logFilename := "customBlockLogFile"
+		csvFilename := "customBlockLogOutput.csv"
+		f, err := os.OpenFile(logFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		logger := zerolog.New(f)
+		zerolog.TimeFieldFormat = zerolog.TimeFormatUnixMicro
+
+		exe, err := computer.NewBlockComputer(vm, execCtx, metrics, trace.NewNoopTracer(), logger, committer)
 		require.NoError(t, err)
 
 		// Generate your own block with 2 collections and 4 txs in total
@@ -103,6 +110,12 @@ func TestBlockExecutor_CustomBlock(t *testing.T) {
 
 		assertEventHashesMatch(t, numCol+1, result)
 		vm.AssertExpectations(t)
+
+		//export the log file to csv
+		err = convertJSONToCSV(logFilename, csvFilename)
+		if err != nil {
+			// do nothing
+		}
 	})
 }
 
