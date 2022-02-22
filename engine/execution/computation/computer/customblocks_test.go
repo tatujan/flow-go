@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/onflow/flow-go/engine/execution/computation/committer"
 	"github.com/onflow/flow-go/engine/execution/computation/computer"
-	computermock "github.com/onflow/flow-go/engine/execution/computation/computer/mock"
 	"github.com/onflow/flow-go/engine/execution/state/delta"
 	"github.com/onflow/flow-go/fvm/programs"
 	"github.com/onflow/flow-go/fvm/state"
+	led "github.com/onflow/flow-go/ledger"
+	ledgermock "github.com/onflow/flow-go/ledger/mock"
 	"github.com/onflow/flow-go/model/flow"
 	"github.com/onflow/flow-go/module/mempool/entity"
 	modulemock "github.com/onflow/flow-go/module/mock"
@@ -92,12 +94,26 @@ func (vmt vmTest) run(
 		//	}).Times(numTxPerCol*numCol + 1) // set how many times this mock is going to return ( numTX + systemchunk)
 
 		// todo: 2. Init computer.ViewCommitter
-		committer := new(computermock.ViewCommitter)
-		// View committer takes (state.View, flow.StateCmmitment)
-		// Returns flow.StateCommitment, ByteArray, *ledger.TrieUpdate, error
-		committer.On("CommitView", mock.Anything, mock.Anything).
-			Return(nil, nil, nil, nil).
+		ledger := new(ledgermock.Ledger)
+		var expectedStateCommitment led.State
+		copy(expectedStateCommitment[:], []byte{1, 2, 3})
+		ledger.On("Set", mock.Anything).
+			Return(expectedStateCommitment, nil, nil).
 			Times(numTxPerCol*numCol + 1)
+
+		expectedProof := led.Proof([]byte{2, 3, 4})
+		ledger.On("Prove", mock.Anything).
+			Return(expectedProof, nil).
+			Times(numTxPerCol*numCol + 1)
+		committer := committer.NewLedgerViewCommitter(ledger, trace.NewNoopTracer())
+
+		//committer := new(computermock.ViewCommitter)
+		//// View committer takes (state.View, flow.StateCmmitment)
+		//// Returns flow.StateCommitment, ByteArray, *ledger.TrieUpdate, error
+		//committer.On("CommitView", mock.Anything, mock.Anything).
+		//	Return(nil, nil, nil, nil).
+		//	Times(numTxPerCol*numCol + 1)
+
 		// todo: 3. Initialize module.ExectionMetrics
 		metrics := new(modulemock.ExecutionMetrics)
 		// ExecutionColllectionExecuted takes time.Duration, compUsed(uint64), txCounts, colCounts
