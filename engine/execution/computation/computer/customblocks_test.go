@@ -8,6 +8,7 @@ import (
 	computermock "github.com/onflow/flow-go/engine/execution/computation/computer/mock"
 	"github.com/onflow/flow-go/engine/execution/state/delta"
 	"github.com/onflow/flow-go/fvm/programs"
+	"github.com/onflow/flow-go/fvm/state"
 	"github.com/onflow/flow-go/model/flow"
 	"github.com/onflow/flow-go/module/mempool/entity"
 	modulemock "github.com/onflow/flow-go/module/mock"
@@ -42,31 +43,62 @@ type CustomAddressGenerator struct {
 	seeds   []uint64
 }
 
-func TestBlockExecutor_CustomBlock(t *testing.T) {
+type vmTest struct {
+	bootstrapOptions []fvm.BootstrapProcedureOption
+	contextOptions   []fvm.Option
+}
 
-	t.Run("custom blocks", func(t *testing.T) {
+func newVMTest() vmTest {
+	return vmTest{}
+}
+
+func (vmt vmTest) withBootstrapProcedureOptions(opts ...fvm.BootstrapProcedureOption) vmTest {
+	vmt.bootstrapOptions = append(vmt.bootstrapOptions, opts...)
+	return vmt
+}
+
+func (vmt vmTest) withContextOptions(opts ...fvm.Option) vmTest {
+	vmt.contextOptions = append(vmt.contextOptions, opts...)
+	return vmt
+}
+
+func (vmt vmTest) run(
+	f func(t *testing.T, vm *fvm.VirtualMachine, chain flow.Chain, ctx fvm.Context, view state.View),
+) func(t *testing.T) {
+	return func(t *testing.T) {
 		numTxPerCol := 3
 		numCol := 3
 		seeds := []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9}
 		//rag := &RandomAddressGenerator{}
 
-		execCtx := fvm.NewContext(zerolog.Nop()) // Initialize execution Context from Flow VM
-		vm := new(computermock.VirtualMachine)
+		// todo: 1. Initialize Computer.VirtualMachine
+		//vm := new(computermock.VirtualMachine)
+		runtime := fvm.NewInterpreterRuntime()
+		chain := flow.Testnet.Chain()
+		vm := fvm.NewVirtualMachine(runtime)
+		baseOpts := []fvm.Option{
+			fvm.WithChain(chain),
+		}
 
-		// VM Run takes, (fvm.Context, fvm.Procedure, state.View, programs.Programs)
-		vm.On("Run", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-			Return(nil).
-			Run(func(args mock.Arguments) {
-				tx := args[1].(*fvm.TransactionProcedure) // get transactions Procedures?
-				tx.Events = generateEvents(1, tx.TxIndex) // generate events from txIndex
-			}).Times(numTxPerCol*numCol + 1) // set how many times this mock is going to return ( numTX + systemchunk)
+		opts := append(baseOpts, vmt.contextOptions...)
+		execCtx := fvm.NewContext(zerolog.Nop(), opts...)
+		//view := utils.NewSimpleView()
+		//// VM Run takes, (fvm.Context, fvm.Procedure, state.View, programs.Programs)
+		//vm.On("Run", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		//	Return(nil).
+		//	Run(func(args mock.Arguments) {
+		//		tx := args[1].(*fvm.TransactionProcedure) // get transactions Procedures?
+		//		tx.Events = generateEvents(1, tx.TxIndex) // generate events from txIndex
+		//	}).Times(numTxPerCol*numCol + 1) // set how many times this mock is going to return ( numTX + systemchunk)
+
+		// todo: 2. Init computer.ViewCommitter
 		committer := new(computermock.ViewCommitter)
 		// View committer takes (state.View, flow.StateCmmitment)
 		// Returns flow.StateCommitment, ByteArray, *ledger.TrieUpdate, error
 		committer.On("CommitView", mock.Anything, mock.Anything).
 			Return(nil, nil, nil, nil).
 			Times(numTxPerCol*numCol + 1)
-
+		// todo: 3. Initialize module.ExectionMetrics
 		metrics := new(modulemock.ExecutionMetrics)
 		// ExecutionColllectionExecuted takes time.Duration, compUsed(uint64), txCounts, colCounts
 		metrics.On("ExecutionCollectionExecuted", mock.Anything, mock.Anything, mock.Anything).
@@ -78,6 +110,7 @@ func TestBlockExecutor_CustomBlock(t *testing.T) {
 			Return(nil).
 			Times(numCol*numTxPerCol + 1)
 
+		// todo: 4. Init New Computer from vm, execCtx, metric, trace, logger, comitter
 		exe, err := computer.NewBlockComputer(vm, execCtx, metrics, trace.NewNoopTracer(), zerolog.Nop(), committer)
 		require.NoError(t, err)
 
@@ -87,6 +120,7 @@ func TestBlockExecutor_CustomBlock(t *testing.T) {
 		customAddr.init(uint64(numCol*numTxPerCol), seeds)
 		block := generateCustomBlock(numCol, numTxPerCol, customAddr)
 
+		// returns nill register value
 		view := delta.NewView(func(owner, controller, key string) (flow.RegisterValue, error) {
 			return nil, nil
 		})
@@ -97,8 +131,19 @@ func TestBlockExecutor_CustomBlock(t *testing.T) {
 		assert.Len(t, result.TrieUpdates, numCol+1)
 
 		assertEventHashesMatch(t, numCol+1, result)
-		vm.AssertExpectations(t)
-	})
+		//vm.AssertExpectations(t)
+		f(t, vm, chain, execCtx, view)
+
+	}
+}
+
+func TestPrograms(t *testing.T) {
+	t.Run("CustomBlock Testing w/ no mocks",
+		newVMTest().run(
+			func(t *testing.T, vm *fvm.VirtualMachine, chain flow.Chain, ctx fvm.Context, view state.View) {
+			},
+		),
+	)
 }
 
 func generateCustomBlock(numberOfCol, numOfTxs int, customAddr *CustomAddressGenerator) *entity.ExecutableBlock {
