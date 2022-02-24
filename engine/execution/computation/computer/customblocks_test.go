@@ -73,7 +73,7 @@ func (vmt vmTest) run(
 		seeds := []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9}
 		//rag := &RandomAddressGenerator{}
 
-		// todo: 1. Initialize Computer.VirtualMachine
+		// todo: DONE! 1. Initialize Computer.VirtualMachine
 		//vm := new(computermock.VirtualMachine)
 		runtime := fvm.NewInterpreterRuntime()
 		chain := flow.Testnet.Chain()
@@ -81,38 +81,36 @@ func (vmt vmTest) run(
 		baseOpts := []fvm.Option{
 			fvm.WithChain(chain),
 		}
-
 		opts := append(baseOpts, vmt.contextOptions...)
 		execCtx := fvm.NewContext(zerolog.Nop(), opts...)
-		//view := utils.NewSimpleView()
-		//// VM Run takes, (fvm.Context, fvm.Procedure, state.View, programs.Programs)
-		//vm.On("Run", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		//	Return(nil).
-		//	Run(func(args mock.Arguments) {
-		//		tx := args[1].(*fvm.TransactionProcedure) // get transactions Procedures?
-		//		tx.Events = generateEvents(1, tx.TxIndex) // generate events from txIndex
-		//	}).Times(numTxPerCol*numCol + 1) // set how many times this mock is going to return ( numTX + systemchunk)
 
-		// todo: 2. Init computer.ViewCommitter
+		// todo: [WIP] 2. Init computer.ViewCommitter
+		// code snippet to unmock ledger
+		//wal := &fixtures.NoopWAL{}
+		//ledger, err := complete.NewLedger(wal, 100, &metrics.NoopCollector{}, zerolog.Logger{}, complete.DefaultPathFinderVersion)
+		//curS := ledger.InitialState()
+		//q := utils.QueryFixture()
+		//q.SetState(curS)
+		//require.NoError(t, err)
+		//retProof, err := ledger.Prove(q)
+		//require.NoError(t, err)
+		//trieProof, err := encoding.DecodeTrieBatchProof(retProof)
+		//assert.True(t, proof.VerifyTrieBatchProof(trieProof, curS))
+
+		// unmocking the ledger requires to provide proofs of state commitment.
+		// However dummy transactions w/o signatures do not yield valid proofs.
 		ledger := new(ledgermock.Ledger)
 		var expectedStateCommitment led.State
 		copy(expectedStateCommitment[:], []byte{1, 2, 3})
 		ledger.On("Set", mock.Anything).
 			Return(expectedStateCommitment, nil, nil).
 			Times(numTxPerCol*numCol + 1)
-
 		expectedProof := led.Proof([]byte{2, 3, 4})
 		ledger.On("Prove", mock.Anything).
 			Return(expectedProof, nil).
 			Times(numTxPerCol*numCol + 1)
-		committer := committer.NewLedgerViewCommitter(ledger, trace.NewNoopTracer())
 
-		//committer := new(computermock.ViewCommitter)
-		//// View committer takes (state.View, flow.StateCmmitment)
-		//// Returns flow.StateCommitment, ByteArray, *ledger.TrieUpdate, error
-		//committer.On("CommitView", mock.Anything, mock.Anything).
-		//	Return(nil, nil, nil, nil).
-		//	Times(numTxPerCol*numCol + 1)
+		blockcommitter := committer.NewLedgerViewCommitter(ledger, trace.NewNoopTracer())
 
 		// todo: 3. Initialize module.ExectionMetrics
 		metrics := new(modulemock.ExecutionMetrics)
@@ -127,7 +125,7 @@ func (vmt vmTest) run(
 			Times(numCol*numTxPerCol + 1)
 
 		// todo: 4. Init New Computer from vm, execCtx, metric, trace, logger, comitter
-		exe, err := computer.NewBlockComputer(vm, execCtx, metrics, trace.NewNoopTracer(), zerolog.Nop(), committer)
+		exe, err := computer.NewBlockComputer(vm, execCtx, metrics, trace.NewNoopTracer(), zerolog.Nop(), blockcommitter)
 		require.NoError(t, err)
 
 		// Generate your own block with 2 collections and 4 txs in total
