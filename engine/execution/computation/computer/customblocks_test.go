@@ -13,13 +13,15 @@ import (
 	ledgermock "github.com/onflow/flow-go/ledger/mock"
 	"github.com/onflow/flow-go/model/flow"
 	"github.com/onflow/flow-go/module/mempool/entity"
-	modulemock "github.com/onflow/flow-go/module/mock"
+	"github.com/onflow/flow-go/module/metrics"
 	"github.com/onflow/flow-go/module/trace"
 	"github.com/onflow/flow-go/utils/unittest"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"math/rand"
+	"os"
 	"testing"
 
 	"github.com/onflow/flow-go/fvm"
@@ -115,19 +117,12 @@ func (vmt vmTest) run(
 		//	Times(numTxPerCol*numCol + 1)
 
 		// todo: 3. Initialize module.ExectionMetrics
-		metrics := new(modulemock.ExecutionMetrics)
-		// ExecutionColllectionExecuted takes time.Duration, compUsed(uint64), txCounts, colCounts
-		metrics.On("ExecutionCollectionExecuted", mock.Anything, mock.Anything, mock.Anything).
-			Return(nil).
-			Times(numCol) // num tx + system chunk
-
-		//dur, compUsed, eventCounts, failed
-		metrics.On("ExecutionTransactionExecuted", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-			Return(nil).
-			Times(numCol*numTxPerCol + 1)
+		logger := zerolog.New(os.Stderr)
+		tracer, err := trace.NewTracer(logger, "CustomBlockTrace", "test", trace.SensitivityCaptureAll)
+		metrics := metrics.NewExecutionCollector(tracer, prometheus.DefaultRegisterer)
 
 		// todo: 4. Init New Computer from vm, execCtx, metric, trace, logger, comitter
-		exe, err := computer.NewBlockComputer(vm, execCtx, metrics, trace.NewNoopTracer(), zerolog.Nop(), committer)
+		exe, err := computer.NewBlockComputer(vm, execCtx, metrics, tracer, logger, committer)
 		require.NoError(t, err)
 
 		// Generate your own block with 2 collections and 4 txs in total
