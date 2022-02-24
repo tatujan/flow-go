@@ -100,6 +100,16 @@ func (vmt vmTest) run(
 		//		tx.Events = generateEvents(1, tx.TxIndex) // generate events from txIndex
 		//	}).Times(numTxPerCol*numCol + 1) // set how many times this mock is going to return ( numTX + systemchunk)
 
+		// todo: 3. Initialize module.ExectionMetrics
+		logFilename := "logFile"
+		csvFilename := "customBlockLogOutput.csv"
+		file, err := os.OpenFile(logFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		logger := zerolog.New(file)
+		// NewTracer takes a logger, service name (string), a chainID (string), and a trace sensitivity (int))
+		tracer, err := trace.NewTracer(logger, "CustomBlockTrace", "test", trace.SensitivityCaptureAll)
+		// NewExecutionCollector generates a metrics object, taking a tracer and a Registerer object as input.
+		metrics := metrics.NewExecutionCollector(tracer, prometheus.DefaultRegisterer)
+
 		// todo: 2. Init computer.ViewCommitter
 		ledger := new(ledgermock.Ledger)
 		var expectedStateCommitment led.State
@@ -112,7 +122,7 @@ func (vmt vmTest) run(
 		ledger.On("Prove", mock.Anything).
 			Return(expectedProof, nil).
 			Times(numTxPerCol*numCol + 1)
-		committer := committer.NewLedgerViewCommitter(ledger, trace.NewNoopTracer())
+		committer := committer.NewLedgerViewCommitter(ledger, tracer)
 
 		//committer := new(computermock.ViewCommitter)
 		//// View committer takes (state.View, flow.StateCmmitment)
@@ -120,14 +130,6 @@ func (vmt vmTest) run(
 		//committer.On("CommitView", mock.Anything, mock.Anything).
 		//	Return(nil, nil, nil, nil).
 		//	Times(numTxPerCol*numCol + 1)
-
-		// todo: 3. Initialize module.ExectionMetrics
-		logFilename := "logFile"
-		csvFilename := "customBlockLogOutput.csv"
-		file, err := os.OpenFile(logFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-		logger := zerolog.New(file)
-		tracer, err := trace.NewTracer(logger, "CustomBlockTrace", "test", trace.SensitivityCaptureAll)
-		metrics := metrics.NewExecutionCollector(tracer, prometheus.DefaultRegisterer)
 
 		// todo: 4. Init New Computer from vm, execCtx, metric, trace, logger, comitter
 		exe, err := computer.NewBlockComputer(vm, execCtx, metrics, tracer, logger, committer)
