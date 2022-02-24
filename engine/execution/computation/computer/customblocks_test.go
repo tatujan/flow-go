@@ -122,7 +122,10 @@ func (vmt vmTest) run(
 		//	Times(numTxPerCol*numCol + 1)
 
 		// todo: 3. Initialize module.ExectionMetrics
-		logger := zerolog.New(os.Stderr)
+		logFilename := "logFile"
+		csvFilename := "customBlockLogOutput.csv"
+		file, err := os.OpenFile(logFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		logger := zerolog.New(file)
 		tracer, err := trace.NewTracer(logger, "CustomBlockTrace", "test", trace.SensitivityCaptureAll)
 		metrics := metrics.NewExecutionCollector(tracer, prometheus.DefaultRegisterer)
 
@@ -148,6 +151,33 @@ func (vmt vmTest) run(
 
 		assertEventHashesMatch(t, numCol+1, result)
 		//vm.AssertExpectations(t)
+
+		// open file containing logs in JSON format
+		sourceFile, err := os.Open(logFilename)
+		if err != nil {
+			// do nothing?
+		}
+		// create csv file
+		outputFile, err := os.Create(csvFilename)
+		if err != nil {
+			// do nothing?
+		}
+		// convert the JSON logs to CSV file
+		lineswritten, err := convertJSONToCSV(sourceFile, outputFile)
+		if err != nil {
+			// do nothing
+		}
+		if lineswritten == 0 {
+			panic("Unexpected logs, most likely block execution contained errors. See " + logFilename)
+		}
+
+		outputFile.Close()
+		sourceFile.Close()
+		// remove original json log file
+		os.Remove(logFilename)
+		expectedLines := numCol*numTxPerCol + numCol + 2 // +1 for system tx, +1 for block execution log
+		assert.Equal(t, lineswritten, expectedLines)
+
 		f(t, vm, chain, execCtx, view)
 
 	}
@@ -291,7 +321,7 @@ func (e *CustomAddressGenerator) AddressCount() uint64 {
 func convertJSONToCSV(sourceFile *os.File, outputFile *os.File) (int, error) {
 	linesWritten := 0
 	// struct with all possible fields for log messages
-	type TraceOutput struct {
+	type LogOutput struct {
 		Level                string `json:"level"`
 		CollectionID         string `json:"collection_id"`
 		NumberOfTransactions int64  `json:"numberOfTransactions"`
@@ -312,11 +342,11 @@ func convertJSONToCSV(sourceFile *os.File, outputFile *os.File) (int, error) {
 	scanner := bufio.NewScanner(sourceFile)
 	scanner.Split(bufio.ScanLines)
 
-	// unmarshall each line into a TraceOutput struct
-	var traceOutputs []TraceOutput
+	// unmarshall each line into a LogOutput struct
+	var logOutputs []LogOutput
 	for scanner.Scan() {
-		// default values of trace output
-		traceOutput := TraceOutput{
+		// default values of log output
+		logOutput := LogOutput{
 			Level:                "none",
 			CollectionID:         "none",
 			NumberOfTransactions: -1,
@@ -333,21 +363,21 @@ func convertJSONToCSV(sourceFile *os.File, outputFile *os.File) (int, error) {
 			Message:              "none",
 		}
 		bytes := scanner.Bytes()
-		err := json.Unmarshal(bytes, &traceOutput)
+		err := json.Unmarshal(bytes, &logOutput)
 		if err != nil {
 			return linesWritten, err
 		}
-		traceOutputs = append(traceOutputs, traceOutput)
+		logOutputs = append(logOutputs, logOutput)
 	}
 
 	writer := csv.NewWriter(outputFile)
 	defer writer.Flush()
 
 	// use reflection to produce csv header and get struct field values
-	r := reflect.ValueOf(TraceOutput{})
+	r := reflect.ValueOf(LogOutput{})
 	typeOfTO := r.Type()
 	numFields := r.NumField()
-	numRecords := len(traceOutputs)
+	numRecords := len(logOutputs)
 
 	// generate the csv headers from struct fields
 	var header []string
@@ -361,7 +391,7 @@ func convertJSONToCSV(sourceFile *os.File, outputFile *os.File) (int, error) {
 		// generate the csv header from field names as we iterate
 		header = append(header, typeOfTO.Field(i).Name)
 		for j := 0; j < numRecords; j++ {
-			value := reflect.ValueOf(traceOutputs[j]).Field(i).Interface()
+			value := reflect.ValueOf(logOutputs[j]).Field(i).Interface()
 			strValue := fmt.Sprintf("%v", value)
 			csvData[j][i] = strValue
 		}
