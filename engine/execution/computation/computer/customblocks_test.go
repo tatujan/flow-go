@@ -101,7 +101,7 @@ func (vmt vmTest) run(
 		//	}).Times(numTxPerCol*numCol + 1) // set how many times this mock is going to return ( numTX + systemchunk)
 
 		// todo: 3. Initialize module.ExectionMetrics
-		logFilename := "logFile"
+		logFilename := "customBlockTest.log"
 		csvFilename := "customBlockLogOutput.csv"
 		file, err := os.OpenFile(logFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 		logger := zerolog.New(file)
