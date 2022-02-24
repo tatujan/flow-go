@@ -1,8 +1,11 @@
 package computer_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"github.com/onflow/flow-go/engine/execution/computation/committer"
 	"github.com/onflow/flow-go/engine/execution/computation/computer"
@@ -13,13 +16,17 @@ import (
 	ledgermock "github.com/onflow/flow-go/ledger/mock"
 	"github.com/onflow/flow-go/model/flow"
 	"github.com/onflow/flow-go/module/mempool/entity"
-	modulemock "github.com/onflow/flow-go/module/mock"
+	"github.com/onflow/flow-go/module/metrics"
 	"github.com/onflow/flow-go/module/trace"
 	"github.com/onflow/flow-go/utils/unittest"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"math/rand"
+	"os"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/onflow/flow-go/fvm"
@@ -93,6 +100,16 @@ func (vmt vmTest) run(
 		//		tx.Events = generateEvents(1, tx.TxIndex) // generate events from txIndex
 		//	}).Times(numTxPerCol*numCol + 1) // set how many times this mock is going to return ( numTX + systemchunk)
 
+		// todo: 3. Initialize module.ExectionMetrics
+		logFilename := "customBlockTest.log"
+		csvFilename := "customBlockLogOutput.csv"
+		file, err := os.OpenFile(logFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		logger := zerolog.New(file)
+		// NewTracer takes a logger, service name (string), a chainID (string), and a trace sensitivity (int))
+		tracer, err := trace.NewTracer(logger, "CustomBlockTrace", "test", trace.SensitivityCaptureAll)
+		// NewExecutionCollector generates a metrics object, taking a tracer and a Registerer object as input.
+		metrics := metrics.NewExecutionCollector(tracer, prometheus.DefaultRegisterer)
+
 		// todo: 2. Init computer.ViewCommitter
 		ledger := new(ledgermock.Ledger)
 		var expectedStateCommitment led.State
@@ -105,7 +122,7 @@ func (vmt vmTest) run(
 		ledger.On("Prove", mock.Anything).
 			Return(expectedProof, nil).
 			Times(numTxPerCol*numCol + 1)
-		committer := committer.NewLedgerViewCommitter(ledger, trace.NewNoopTracer())
+		committer := committer.NewLedgerViewCommitter(ledger, tracer)
 
 		//committer := new(computermock.ViewCommitter)
 		//// View committer takes (state.View, flow.StateCmmitment)
@@ -114,20 +131,8 @@ func (vmt vmTest) run(
 		//	Return(nil, nil, nil, nil).
 		//	Times(numTxPerCol*numCol + 1)
 
-		// todo: 3. Initialize module.ExectionMetrics
-		metrics := new(modulemock.ExecutionMetrics)
-		// ExecutionColllectionExecuted takes time.Duration, compUsed(uint64), txCounts, colCounts
-		metrics.On("ExecutionCollectionExecuted", mock.Anything, mock.Anything, mock.Anything).
-			Return(nil).
-			Times(numCol) // num tx + system chunk
-
-		//dur, compUsed, eventCounts, failed
-		metrics.On("ExecutionTransactionExecuted", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-			Return(nil).
-			Times(numCol*numTxPerCol + 1)
-
 		// todo: 4. Init New Computer from vm, execCtx, metric, trace, logger, comitter
-		exe, err := computer.NewBlockComputer(vm, execCtx, metrics, trace.NewNoopTracer(), zerolog.Nop(), committer)
+		exe, err := computer.NewBlockComputer(vm, execCtx, metrics, tracer, logger, committer)
 		require.NoError(t, err)
 
 		// Generate your own block with 2 collections and 4 txs in total
@@ -148,6 +153,33 @@ func (vmt vmTest) run(
 
 		assertEventHashesMatch(t, numCol+1, result)
 		//vm.AssertExpectations(t)
+
+		// open file containing logs in JSON format
+		sourceFile, err := os.Open(logFilename)
+		if err != nil {
+			// do nothing?
+		}
+		// create csv file
+		outputFile, err := os.Create(csvFilename)
+		if err != nil {
+			// do nothing?
+		}
+		// convert the JSON logs to CSV file
+		lineswritten, err := convertJSONToCSV(sourceFile, outputFile)
+		if err != nil {
+			// do nothing
+		}
+		if lineswritten == 0 {
+			panic("Unexpected logs, most likely block execution contained errors. See " + logFilename)
+		}
+
+		outputFile.Close()
+		sourceFile.Close()
+		// remove original json log file
+		os.Remove(logFilename)
+		expectedLines := numCol*numTxPerCol + numCol + 2 // +1 for system tx, +1 for block execution log
+		assert.Equal(t, lineswritten, expectedLines)
+
 		f(t, vm, chain, execCtx, view)
 
 	}
@@ -286,4 +318,110 @@ func (e *CustomAddressGenerator) Bytes() []byte {
 
 func (e *CustomAddressGenerator) AddressCount() uint64 {
 	panic("not implemented")
+}
+
+func convertJSONToCSV(sourceFile *os.File, outputFile *os.File) (int, error) {
+	linesWritten := 0
+	// struct with all possible fields for log messages
+	type LogOutput struct {
+		Level                string `json:"level"`
+		CollectionID         string `json:"collection_id"`
+		NumberOfTransactions int64  `json:"numberOfTransactions"`
+		BlockID              string `json:"block_id"`
+		TxID                 string `json:"tx_id"`
+		TraceID              string `json:"traceID"`
+		TxIndex              int64  `json:"tx_index"`
+		Height               int64  `json:"height"`
+		SystemChunk          bool   `json:"system_chunk"`
+		ParallelExecution    bool   `json:"parallel_execution"`
+		ComputationUsed      int64  `json:"computation_used"`
+		TimeSpentInNS        int64  `json:"timeSpentInNS"`
+		Time                 int64  `json:"time"`
+		Message              string `json:"message"`
+	}
+
+	// split file into lines (each line is a JSON object)
+	scanner := bufio.NewScanner(sourceFile)
+	scanner.Split(bufio.ScanLines)
+
+	// unmarshall each line into a LogOutput struct
+	var logOutputs []LogOutput
+	for scanner.Scan() {
+		// default values of log output
+		logOutput := LogOutput{
+			Level:                "none",
+			CollectionID:         "none",
+			NumberOfTransactions: -1,
+			BlockID:              "none",
+			TxID:                 "none",
+			TraceID:              "none",
+			TxIndex:              -1,
+			Height:               -1,
+			SystemChunk:          false,
+			ParallelExecution:    false,
+			ComputationUsed:      -1,
+			TimeSpentInNS:        -1,
+			Time:                 -1,
+			Message:              "none",
+		}
+		bytes := scanner.Bytes()
+		err := json.Unmarshal(bytes, &logOutput)
+		if err != nil {
+			return linesWritten, err
+		}
+		logOutputs = append(logOutputs, logOutput)
+	}
+
+	writer := csv.NewWriter(outputFile)
+	defer writer.Flush()
+
+	// use reflection to produce csv header and get struct field values
+	r := reflect.ValueOf(LogOutput{})
+	typeOfTO := r.Type()
+	numFields := r.NumField()
+	numRecords := len(logOutputs)
+
+	// generate the csv headers from struct fields
+	var header []string
+	csvData := make([][]string, numRecords)
+	for col := range csvData {
+		csvData[col] = make([]string, numFields)
+	}
+
+	// iterate over each field, aggregate log data per field
+	for i := 0; i < numFields; i++ {
+		// generate the csv header from field names as we iterate
+		header = append(header, typeOfTO.Field(i).Name)
+		for j := 0; j < numRecords; j++ {
+			value := reflect.ValueOf(logOutputs[j]).Field(i).Interface()
+			strValue := fmt.Sprintf("%v", value)
+			csvData[j][i] = strValue
+		}
+	}
+	// write header to csv file
+	if err := writer.Write(header); err != nil {
+		return linesWritten, err
+	}
+	// write all log data to csv
+	for row := range csvData {
+		data := csvData[row]
+		// filter out all entries that do not have timing data
+		if !stringSliceContainsSubstring("executing", data) {
+			// write row to file
+			if err := writer.Write(data); err != nil {
+				return linesWritten, err
+			}
+			linesWritten++
+		}
+	}
+	return linesWritten, nil
+}
+
+func stringSliceContainsSubstring(substring string, slice []string) bool {
+	for _, elem := range slice {
+		if strings.Contains(elem, substring) {
+			return true
+		}
+	}
+	return false
 }
