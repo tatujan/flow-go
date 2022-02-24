@@ -131,7 +131,7 @@ func TestBlockExecutor_CustomBlock(t *testing.T) {
 		sourceFile.Close()
 		// remove original json log file
 		os.Remove(logFilename)
-		expectedLines := numCol*numTxPerCol + numCol + 1 // +1 for system tx
+		expectedLines := numCol*numTxPerCol + numCol + 2 // +1 for system tx, +1 for block execution log
 		assert.Equal(t, lineswritten, expectedLines)
 	})
 }
