@@ -18,6 +18,7 @@ crypto/relic/
 
 # Output from logging to debug
 *.log
+*.csv
 
 # Output from binstat
 *.binstat.txt*
