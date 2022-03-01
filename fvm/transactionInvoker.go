@@ -119,7 +119,7 @@ func (i *TransactionInvoker) Process(
 		}
 
 		location := common.TransactionLocation(proc.ID[:])
-
+		// Matteo: transaction is actually executed here in fvm:
 		err := vm.Runtime.ExecuteTransaction(
 			runtime.Script{
 				Source:    proc.Transaction.Script,
@@ -185,6 +185,7 @@ func (i *TransactionInvoker) Process(
 	// it there was any transaction error clear changes and try to deduct fees again
 	if txError != nil {
 		sth.DisableLimitEnforcement()
+		// Matteo: changes are abandoned in fvm simply by dropping the delta (and calling cleanup?)
 		// drop delta since transaction failed
 		childState.View().DropDelta()
 		// if tx fails just do clean up

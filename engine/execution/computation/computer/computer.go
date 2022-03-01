@@ -155,7 +155,8 @@ func (e *blockComputer) executeBlock(
 		blockSpan: blockSpan,
 		tracer:    e.tracer,
 		state:     *block.StartState,
-		views:     make(chan state.View, len(collections)+1),
+		// MATTEO: views channel is buffered to the total number of expected collections (incl system collection)
+		views: make(chan state.View, len(collections)+1),
 		callBack: func(state flow.StateCommitment, proof []byte, trieUpdate *ledger.TrieUpdate, err error) {
 			if err != nil {
 				panic(err)
@@ -188,14 +189,29 @@ func (e *blockComputer) executeBlock(
 		wg.Done()
 	}()
 
-	collectionIndex := 0
+	// Matteo: need to use dependency tree to merge all tx views which do not need to be executed again, then re-execute
+	// all tx that had a concurrent dependency.
 
+	// right now the only interface we have is "execute collection" and "execute transaction". Are we going to need to
+	// add another interface for executing a specific set of TX not specified by a collection? Make a new collection?
+	// In theory we should have only complete blocks, and thus complete tx data, we should be able to shuffle/execute
+	// them independently.
+
+	collectionIndex := 0
+	// Matteo: would parallel execution be a series of go routines?
 	for i, collection := range collections {
+		// Matteo: a view is an object from the delta module. A view contains a delta (all register mutations) and a read set (all register reads).
+		// colView at this point has an empty delta and read set.
 		colView := stateView.NewChild()
+		// Matteo: to anticipate dependencies before execution we would have to do it here or within executeCollection.
 		txIndex, err = e.executeCollection(blockSpan, collectionIndex, txIndex, blockCtx, colView, programs, collection, res)
 		if err != nil {
 			return nil, fmt.Errorf("failed to execute collection at txIndex %v: %w", txIndex, err)
 		}
+		// MATTEO: Possible dependency detection in Commit and MergeView
+		// A colView, once modified by executeCollection, will now have all deltas and reads associated with the collection.
+		// Blocks are not committed all at once, the final commitments happen piecewise at the collection level.
+		// We can definitely determine dependencies once we have colViews.
 		bc.Commit(colView)
 		eh.Hash(res.Events[i])
 		err = stateView.MergeView(colView)
@@ -379,6 +395,7 @@ func (e *blockComputer) executeTransaction(
 		tx.SetTraceSpan(txInternalSpan)
 	}
 
+	// Matteo: I think we would have to keep track of all txViews?
 	txView := collectionView.NewChild()
 	err := e.vm.Run(ctx, tx, txView, programs)
 	if err != nil {
@@ -413,6 +430,7 @@ func (e *blockComputer) executeTransaction(
 
 	// always merge the view, fvm take cares of reverting changes
 	// of failed transaction invocation
+	// Matteo: tx views always merged even if tx failed -> returned view reflects change to fvm state.
 	err = collectionView.MergeView(txView)
 	if err != nil {
 		return fmt.Errorf("merging tx view to collection view failed for tx %v: %w",
@@ -457,6 +475,7 @@ type blockCommitter struct {
 func (bc *blockCommitter) Run() {
 	for view := range bc.views {
 		span := bc.tracer.StartSpanFromParent(bc.blockSpan, trace.EXECommitDelta)
+		// Matteo: could resolve conflicts here? Not sure how one would re-execute.
 		stateCommit, proof, trieUpdate, err := bc.committer.CommitView(view, bc.state)
 		bc.callBack(stateCommit, proof, trieUpdate, err)
 		bc.state = stateCommit
