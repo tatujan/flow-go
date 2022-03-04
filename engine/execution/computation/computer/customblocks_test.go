@@ -5,23 +5,27 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	jsoncdc "github.com/onflow/cadence/encoding/json"
+	"github.com/onflow/flow-go/crypto"
+	"github.com/onflow/flow-go/crypto/hash"
+	"github.com/onflow/flow-go/engine/execution"
 	"github.com/onflow/flow-go/engine/execution/computation/committer"
 	"github.com/onflow/flow-go/engine/execution/computation/computer"
+	executionState "github.com/onflow/flow-go/engine/execution/state"
+	bootstrapexec "github.com/onflow/flow-go/engine/execution/state/bootstrap"
 	"github.com/onflow/flow-go/engine/execution/state/delta"
+	"github.com/onflow/flow-go/engine/execution/testutil"
 	"github.com/onflow/flow-go/fvm/programs"
-	"github.com/onflow/flow-go/fvm/state"
-	led "github.com/onflow/flow-go/ledger"
-	ledgermock "github.com/onflow/flow-go/ledger/mock"
+	completeLedger "github.com/onflow/flow-go/ledger/complete"
+	"github.com/onflow/flow-go/ledger/complete/wal/fixtures"
 	"github.com/onflow/flow-go/model/flow"
 	"github.com/onflow/flow-go/module/mempool/entity"
 	"github.com/onflow/flow-go/module/metrics"
 	"github.com/onflow/flow-go/module/trace"
 	"github.com/onflow/flow-go/utils/unittest"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"math/rand"
 	"os"
@@ -72,110 +76,226 @@ func (vmt vmTest) withContextOptions(opts ...fvm.Option) vmTest {
 }
 
 func (vmt vmTest) run(
-	f func(t *testing.T, vm *fvm.VirtualMachine, chain flow.Chain, ctx fvm.Context, view state.View),
+	f func(t *testing.T, chain flow.Chain),
 ) func(t *testing.T) {
 	return func(t *testing.T) {
-		numTxPerCol := 3
-		numCol := 3
-		seeds := []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9}
-		//rag := &RandomAddressGenerator{}
+		numTxPerCol := 2
+		numCol := 2
+		seeds := []uint64{1, 2, 3, 4}
 
-		//vm := new(computermock.VirtualMachine)
-		runtime := fvm.NewInterpreterRuntime()
-		chain := flow.Testnet.Chain()
-		vm := fvm.NewVirtualMachine(runtime)
+		chain := flow.Mainnet.Chain()
 		baseOpts := []fvm.Option{
 			fvm.WithChain(chain),
 		}
 		opts := append(baseOpts, vmt.contextOptions...)
-		execCtx := fvm.NewContext(zerolog.Nop(), opts...)
 
-		logFilename := "customBlockTest.log"
-		csvFilename := "customBlockLogOutput.csv"
-		file, err := os.OpenFile(logFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-		logger := zerolog.New(file)
-		// NewTracer takes a logger, service name (string), a chainID (string), and a trace sensitivity (int))
-		tracer, err := trace.NewTracer(logger, "CustomBlockTrace", "test", trace.SensitivityCaptureAll)
-		// NewExecutionCollector generates a metrics object, taking a tracer and a Registerer object as input.
-		metrics := metrics.NewExecutionCollector(tracer, prometheus.DefaultRegisterer)
+		//transferTokensTx := func(chain flow.Chain) *flow.TransactionBody {
+		//	return flow.NewTransactionBody().
+		//		SetScript([]byte(fmt.Sprintf(`
+		//					// This transaction is a template for a transaction that
+		//					// could be used by anyone to send tokens to another account
+		//					// that has been set up to receive tokens.
+		//					//
+		//					// The withdraw amount and the account from getAccount
+		//					// would be the parameters to the transaction
+		//
+		//					import FungibleToken from 0x%s
+		//					import FlowToken from 0x%s
+		//
+		//					transaction(amount: UFix64, to: Address) {
+		//
+		//						// The Vault resource that holds the tokens that are being transferred
+		//						let sentVault: @FungibleToken.Vault
+		//
+		//						prepare(signer: AuthAccount) {
+		//
+		//							// Get a reference to the signer's stored vault
+		//							let vaultRef = signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVault)
+		//								?? panic("Could not borrow reference to the owner's Vault!")
+		//
+		//							// Withdraw tokens from the signer's stored vault
+		//							self.sentVault <- vaultRef.withdraw(amount: amount)
+		//						}
+		//
+		//						execute {
+		//
+		//							// Get the recipient's public account object
+		//							let recipient = getAccount(to)
+		//
+		//							// Get a reference to the recipient's Receiver
+		//							let receiverRef = recipient.getCapability(/public/flowTokenReceiver)
+		//								.borrow<&{FungibleToken.Receiver}>()
+		//								?? panic("Could not borrow receiver reference to the recipient's Vault")
+		//
+		//							// Deposit the withdrawn tokens in the recipient's receiver
+		//							receiverRef.deposit(from: <-self.sentVault)
+		//						}
+		//					}`, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain))),
+		//		)
+		//}
 
-		// todo: Unmock ledger once we have valid transactions
-		// code snippet to unmock ledger
-		//wal := &fixtures.NoopWAL{}
-		//ledger, err := complete.NewLedger(wal, 100, &metrics.NoopCollector{}, zerolog.Logger{}, complete.DefaultPathFinderVersion)
-		//curS := ledger.InitialState()
-		//q := utils.QueryFixture()
-		//q.SetState(curS)
+		// ==== Create an account ====
+		privateKeys, createAccountTxs := CreateAccountCreationTransactions(t, chain, numCol*numTxPerCol, seeds)
+		fmt.Sprint(len(privateKeys))
+		// this should return the address of newly created account
+		//address, err := chain.AddressAtIndex(5)
 		//require.NoError(t, err)
-		//retProof, err := ledger.Prove(q)
+
+		SignTransactionAsServiceAccounts(createAccountTxs, 0, chain)
 		//require.NoError(t, err)
-		//trieProof, err := encoding.DecodeTrieBatchProof(retProof)
-		//assert.True(t, proof.VerifyTrieBatchProof(trieProof, curS))
 
-		// unmocking the ledger requires to provide proofs of state commitment.
-		// However dummy transactions w/o signatures do not yield valid proofs.
-		ledger := new(ledgermock.Ledger)
-		var expectedStateCommitment led.State
-		copy(expectedStateCommitment[:], []byte{1, 2, 3})
-		ledger.On("Set", mock.Anything).
-			Return(expectedStateCommitment, nil, nil).
-			Times(numTxPerCol*numCol + 1)
-		expectedProof := led.Proof([]byte{2, 3, 4})
-		ledger.On("Prove", mock.Anything).
-			Return(expectedProof, nil).
-			Times(numTxPerCol*numCol + 1)
+		//// ==== Transfer tokens to new account ====
+		//transferTx := transferTokensTx(chain).
+		//	AddAuthorizer(chain.ServiceAddress()).
+		//	AddArgument(jsoncdc.MustEncode(cadence.UFix64(1000))).
+		//	AddArgument(jsoncdc.MustEncode(cadence.NewAddress(address)))
+		//
+		//transferTx.SetProposalKey(chain.ServiceAddress(), 0, 1)
+		//transferTx.SetPayer(chain.ServiceAddress())
+		//
+		//err = testutil.SignEnvelope(
+		//	transferTx,
+		//	chain.ServiceAddress(),
+		//	unittest.ServiceAccountPrivateKey,
+		//)
+		//require.NoError(t, err)
+		//
+		//// ==== Transfer tokens from new account ====
+		//
+		//transferTx2 := transferTokensTx(chain).
+		//	AddAuthorizer(address).
+		//	AddArgument(jsoncdc.MustEncode(cadence.UFix64(tc.tryToTransfer))).
+		//	AddArgument(jsoncdc.MustEncode(cadence.NewAddress(chain.ServiceAddress())))
+		//
+		//transferTx2.SetProposalKey(address, 0, 0)
+		//transferTx2.SetPayer(address)
+		//
+		//err = testutil.SignEnvelope(
+		//	transferTx2,
+		//	address,
+		//	privateKey,
+		//)
+		//require.NoError(t, err)
 
-		blockcommitter := committer.NewLedgerViewCommitter(ledger, tracer)
+		bootstrpOpts := []fvm.BootstrapProcedureOption{
+			fvm.WithInitialTokenSupply(unittest.GenesisTokenSupply),
+			fvm.WithTransactionFee(fvm.DefaultTransactionFees)}
 
-		exe, err := computer.NewBlockComputer(vm, execCtx, metrics, tracer, logger, blockcommitter)
-		require.NoError(t, err)
+		cr := executeBlockAndNotVerify(t, [][]*flow.TransactionBody{
+			{&createAccountTxs[0]},
+			{&createAccountTxs[1]},
+			{&createAccountTxs[2]},
+			{&createAccountTxs[3]},
+		}, chain, opts, bootstrpOpts)
 
-		// Generate your own block with 2 collections and 4 txs in total
-		//block := generateBlock(numCol, numTxPerCol, rag)
-		customAddr := new(CustomAddressGenerator)
-		customAddr.init(uint64(numCol*numTxPerCol), seeds)
-		block := generateCustomBlock(numCol, numTxPerCol, customAddr)
+		fmt.Sprint(cr.ComputationUsed)
 
-		// returns nill register value
-		view := delta.NewView(func(owner, controller, key string) (flow.RegisterValue, error) {
-			return nil, nil
-		})
+		//logFilename := "customBlockTest.log"
+		//csvFilename := "customBlockLogOutput.csv"
+		//file, err := os.OpenFile(logFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		//logger := zerolog.New(file)
+		//// NewTracer takes a logger, service name (string), a chainID (string), and a trace sensitivity (int))
+		//tracer, err := trace.NewTracer(logger, "CustomBlockTrace", "test", trace.SensitivityCaptureAll)
+		//// NewExecutionCollector generates a metrics object, taking a tracer and a Registerer object as input.
+		//metrics := metrics.NewExecutionCollector(tracer, prometheus.DefaultRegisterer)
+		//
+		//bootstrapper := bootstrapexec.NewBootstrapper(logger)
+		//
+		//privateKeys, err := GenerateAccountPrivateKeys(numCol*numTxPerCol, seeds)
+		//require.NoError(t, err)
+		//
+		//ledger, err := completeLedger.NewLedger(wal, 100, metrics, logger, completeLedger.DefaultPathFinderVersion)
+		//require.NoError(t, err)
+		//ledgerCommiter := committer.NewLedgerViewCommitter(ledger, tracer)
+		//
+		//bootstrpOpts := []fvm.BootstrapProcedureOption{
+		//	fvm.WithInitialTokenSupply(unittest.GenesisTokenSupply),
+		//	fvm.WithTransactionFee(fvm.DefaultTransactionFees)}
+		//
+		//initialCommit, err := bootstrapper.BootstrapLedger(
+		//	ledger,
+		//	unittest.ServiceAccountPublicKey,
+		//	chain,
+		//	bootstrpOpts...
+		//)
+		//
+		//// todo: Unmock ledger once we have valid transactions
+		//// code snippet to unmock ledger
+		////wal := &fixtures.NoopWAL{}
+		////ledger, err := complete.NewLedger(wal, 100, &metrics.NoopCollector{}, zerolog.Logger{}, complete.DefaultPathFinderVersion)
+		////curS := ledger.InitialState()
+		////q := utils.QueryFixture()
+		////q.SetState(curS)
+		////require.NoError(t, err)
+		////retProof, err := ledger.Prove(q)
+		////require.NoError(t, err)
+		////trieProof, err := encoding.DecodeTrieBatchProof(retProof)
+		////assert.True(t, proof.VerifyTrieBatchProof(trieProof, curS))
+		//
+		////// unmocking the ledger requires to provide proofs of state commitment.
+		////// However dummy transactions w/o signatures do not yield valid proofs.
+		////ledger := new(ledgermock.Ledger)
+		////var expectedStateCommitment led.State
+		////copy(expectedStateCommitment[:], []byte{1, 2, 3})
+		////ledger.On("Set", mock.Anything).
+		////	Return(expectedStateCommitment, nil, nil).
+		////	Times(numTxPerCol*numCol + 1)
+		////expectedProof := led.Proof([]byte{2, 3, 4})
+		////ledger.On("Prove", mock.Anything).
+		////	Return(expectedProof, nil).
+		////	Times(numTxPerCol*numCol + 1)
+		//
+		////blockcommitter := committer.NewLedgerViewCommitter(ledger, tracer)
+		//
+		//exe, err := computer.NewBlockComputer(vm, execCtx, metrics, tracer, logger, committer.NewNoopViewCommitter())
+		//require.NoError(t, err)
+		//
+		//// Generate your own block with 2 collections and 4 txs in total
+		////block := generateBlock(numCol, numTxPerCol, rag)
+		////customAddr := new(CustomAddressGenerator)
+		////customAddr.init(uint64(numCol*numTxPerCol), seeds)
+		//block := generateCustomBlock(numCol, numTxPerCol, accounts, privateKeys, chain)
+		//
+		//// returns nill register value
+		//view := delta.NewView(func(owner, controller, key string) (flow.RegisterValue, error) {
+		//	return nil, nil
+		//})
+		//
+		//result, err := exe.ExecuteBlock(context.Background(), block, view, programs.NewEmptyPrograms())
+		//assert.NoError(t, err)
+		//assert.Len(t, result.StateSnapshots, numCol+1)
+		//assert.Len(t, result.TrieUpdates, numCol+1)
+		//
+		//assertEventHashesMatch(t, numCol+1, result)
+		////vm.AssertExpectations(t)
+		//
+		//// open file containing logs in JSON format
+		//sourceFile, err := os.Open(logFilename)
+		//if err != nil {
+		//	// do nothing?
+		//}
+		//// create csv file
+		//outputFile, err := os.Create(csvFilename)
+		//if err != nil {
+		//	// do nothing?
+		//}
+		//// convert the JSON logs to CSV file
+		//lineswritten, err := convertJSONToCSV(sourceFile, outputFile)
+		//if err != nil {
+		//	// do nothing
+		//}
+		//if lineswritten == 0 {
+		//	panic("Unexpected logs, most likely block execution contained errors. See " + logFilename)
+		//}
+		//
+		//outputFile.Close()
+		//sourceFile.Close()
+		//// remove original json log file
+		//os.Remove(logFilename)
+		//expectedLines := numCol*numTxPerCol + numCol + 2 // +1 for system tx, +1 for block execution log
+		//assert.Equal(t, lineswritten, expectedLines)
 
-		result, err := exe.ExecuteBlock(context.Background(), block, view, programs.NewEmptyPrograms())
-		assert.NoError(t, err)
-		assert.Len(t, result.StateSnapshots, numCol+1)
-		assert.Len(t, result.TrieUpdates, numCol+1)
-
-		assertEventHashesMatch(t, numCol+1, result)
-		//vm.AssertExpectations(t)
-
-		// open file containing logs in JSON format
-		sourceFile, err := os.Open(logFilename)
-		if err != nil {
-			// do nothing?
-		}
-		// create csv file
-		outputFile, err := os.Create(csvFilename)
-		if err != nil {
-			// do nothing?
-		}
-		// convert the JSON logs to CSV file
-		lineswritten, err := convertJSONToCSV(sourceFile, outputFile)
-		if err != nil {
-			// do nothing
-		}
-		if lineswritten == 0 {
-			panic("Unexpected logs, most likely block execution contained errors. See " + logFilename)
-		}
-
-		outputFile.Close()
-		sourceFile.Close()
-		// remove original json log file
-		os.Remove(logFilename)
-		expectedLines := numCol*numTxPerCol + numCol + 2 // +1 for system tx, +1 for block execution log
-		assert.Equal(t, lineswritten, expectedLines)
-
-		f(t, vm, chain, execCtx, view)
+		f(t, chain)
 
 	}
 }
@@ -183,19 +303,20 @@ func (vmt vmTest) run(
 func TestPrograms(t *testing.T) {
 	t.Run("CustomBlock Testing w/ no mocks",
 		newVMTest().run(
-			func(t *testing.T, vm *fvm.VirtualMachine, chain flow.Chain, ctx fvm.Context, view state.View) {
+			func(t *testing.T, chain flow.Chain) {
 			},
 		),
 	)
 }
 
-func generateCustomBlock(numberOfCol, numOfTxs int, customAddr *CustomAddressGenerator) *entity.ExecutableBlock {
+func generateCustomBlock(numberOfCol, numOfTxs int, accounts []flow.Address, privKeys []flow.AccountPrivateKey, chain flow.Chain) *entity.ExecutableBlock {
 	collections := make([]*entity.CompleteCollection, numberOfCol)
 	guarantees := make([]*flow.CollectionGuarantee, numberOfCol)
 	completeCollections := make(map[flow.Identifier]*entity.CompleteCollection)
 
 	for i := 0; i < numberOfCol; i++ {
-		collection := generateCustomCollection(numOfTxs, customAddr, nil)
+		// func generateCustomCollection(numOfTxs int, accounts []flow.Address, privKeys []flow.AccountPrivateKey, chain flow.Chain, visitor func(body *flow.TransactionBody)) *entity.CompleteCollection {
+		collection := generateCustomCollection(numOfTxs, accounts[i*numOfTxs:(i*numOfTxs)+numOfTxs], privKeys, chain, nil)
 		collections[i] = collection
 		guarantees[i] = collection.Guarantee
 		completeCollections[collection.Guarantee.ID()] = collection
@@ -203,9 +324,7 @@ func generateCustomBlock(numberOfCol, numOfTxs int, customAddr *CustomAddressGen
 
 	block := flow.Block{
 		Header: &flow.Header{
-			Timestamp: flow.GenesisTime,
-			Height:    42,
-			View:      42,
+			View: 42,
 		},
 		Payload: &flow.Payload{
 			Guarantees: guarantees,
@@ -219,30 +338,52 @@ func generateCustomBlock(numberOfCol, numOfTxs int, customAddr *CustomAddressGen
 	}
 }
 
-func generateCustomCollection(numOfTxs int, customAddr *CustomAddressGenerator, visitor func(body *flow.TransactionBody)) *entity.CompleteCollection {
+func generateCustomCollection(numOfTxs int, accounts []flow.Address, privKeys []flow.AccountPrivateKey, chain flow.Chain, visitor func(body *flow.TransactionBody)) *entity.CompleteCollection {
 	transactions := make([]*flow.TransactionBody, numOfTxs)
-
-	for i := 0; i < numOfTxs; i++ {
-		nextAddress, err := customAddr.NextAddress()
-		if err != nil {
-			panic(fmt.Errorf("cannot generate next address in test: %w", err))
+	accontCreationScript := `
+		transaction(publicKey: [UInt8]) {
+			prepare(signer: AuthAccount) {
+				let acct = AuthAccount(payer: signer)
+				acct.addPublicKey(publicKey)
+			}
 		}
+		`
+	for i := 0; i < numOfTxs; i++ {
 		// todo generate valid transactions.
-		txBody := &flow.TransactionBody{
-			Payer:  nextAddress, // a unique payer for each tx to generate a unique id
-			Script: []byte("transaction: { execute {updateVar:{'x': 1, 'y':2}} }"),
+		accountKey := privKeys[i].PublicKey(fvm.AccountKeyWeightThreshold)
+		encAccountKey, _ := flow.EncodeRuntimeAccountPublicKey(accountKey)
+		cadAccountKey := testutil.BytesToCadenceArray(encAccountKey)
+		encCadAccountKey, _ := jsoncdc.Encode(cadAccountKey)
+
+		txBody := flow.NewTransactionBody().
+			SetScript([]byte(accontCreationScript)).
+			AddArgument(encCadAccountKey).
+			AddAuthorizer(chain.ServiceAddress()).
+			SetProposalKey(chain.ServiceAddress(), 0, uint64(i)).
+			SetPayer(chain.ServiceAddress())
+
+		err := testutil.SignPayload(txBody, accounts[i], privKeys[i])
+		if err != nil {
+			panic(fmt.Errorf("cannot sign payload: %w", err))
+		}
+		err = testutil.SignEnvelope(txBody, chain.ServiceAddress(), unittest.ServiceAccountPrivateKey)
+		if err != nil {
+			panic(fmt.Errorf("cannot sign envelope: %w", err))
 		}
 		if visitor != nil {
 			visitor(txBody)
 		}
 		transactions[i] = txBody
-		fmt.Printf("tx data: %s for address: %+v\n", string(txBody.Script), txBody.Payer)
+		//fmt.Printf("tx data: %s for address: %+v\n", string(txBody.Script), txBody.Payer)
 
 	}
 
 	collection := flow.Collection{Transactions: transactions}
 
-	guarantee := &flow.CollectionGuarantee{CollectionID: collection.ID()}
+	guarantee := &flow.CollectionGuarantee{
+		CollectionID: collection.ID(),
+		Signature:    nil,
+	}
 
 	return &entity.CompleteCollection{
 		Guarantee:    guarantee,
@@ -302,6 +443,12 @@ func uint64ToAddress(v uint64) flow.Address {
 	var b [AddressLength]byte
 	binary.BigEndian.PutUint64(b[:], v)
 	return flow.Address(b)
+}
+
+func uint64ToPrivKeyBytes(v uint64) []byte {
+	var b [crypto.KeyGenSeedMinLenECDSAP256]byte
+	binary.BigEndian.PutUint64(b[:], v)
+	return b[:]
 }
 
 func (e *CustomAddressGenerator) CurrentAddress() flow.Address {
@@ -420,4 +567,125 @@ func stringSliceContainsSubstring(substring string, slice []string) bool {
 		}
 	}
 	return false
+}
+
+// GenerateAccountPrivateKeys generates a number of private keys.
+func GenerateAccountPrivateKeys(numberOfPrivateKeys int, seedArr []uint64) ([]flow.AccountPrivateKey, error) {
+	var privateKeys []flow.AccountPrivateKey
+	for i := 0; i < numberOfPrivateKeys; i++ {
+		pk, err := GenerateAccountPrivateKey(seedArr[i])
+		if err != nil {
+			return nil, err
+		}
+		privateKeys = append(privateKeys, pk)
+	}
+
+	return privateKeys, nil
+}
+
+// GenerateAccountPrivateKey generates a private key.
+func GenerateAccountPrivateKey(seedInt uint64) (flow.AccountPrivateKey, error) {
+	seed := uint64ToPrivKeyBytes(seedInt)
+	privateKey, err := crypto.GeneratePrivateKey(crypto.ECDSAP256, seed)
+	if err != nil {
+		return flow.AccountPrivateKey{}, err
+	}
+	pk := flow.AccountPrivateKey{
+		PrivateKey: privateKey,
+		SignAlgo:   crypto.ECDSAP256,
+		HashAlgo:   hash.SHA2_256,
+	}
+	return pk, nil
+}
+
+func executeBlockAndNotVerify(t *testing.T,
+	txs [][]*flow.TransactionBody,
+	chain flow.Chain,
+	opts []fvm.Option,
+	bootstrapOpts []fvm.BootstrapProcedureOption) *execution.ComputationResult {
+	rt := fvm.NewInterpreterRuntime()
+	vm := fvm.NewVirtualMachine(rt)
+
+	logger := zerolog.Nop()
+
+	opts = append(opts, fvm.WithChain(chain))
+
+	fvmContext :=
+		fvm.NewContext(
+			logger,
+			opts...,
+		)
+
+	collector := metrics.NewNoopCollector()
+	tracer := trace.NewNoopTracer()
+
+	wal := &fixtures.NoopWAL{}
+
+	ledger, err := completeLedger.NewLedger(wal, 100, collector, logger, completeLedger.DefaultPathFinderVersion)
+	require.NoError(t, err)
+
+	bootstrapper := bootstrapexec.NewBootstrapper(logger)
+
+	initialCommit, err := bootstrapper.BootstrapLedger(
+		ledger,
+		unittest.ServiceAccountPublicKey,
+		chain,
+		bootstrapOpts...,
+	)
+
+	require.NoError(t, err)
+
+	ledgerCommiter := committer.NewLedgerViewCommitter(ledger, tracer)
+
+	blockComputer, err := computer.NewBlockComputer(vm, fvmContext, collector, tracer, logger, ledgerCommiter)
+	require.NoError(t, err)
+
+	view := delta.NewView(executionState.LedgerGetRegister(ledger, initialCommit))
+
+	executableBlock := unittest.ExecutableBlockFromTransactions(txs)
+	executableBlock.StartState = &initialCommit
+
+	computationResult, err := blockComputer.ExecuteBlock(context.Background(), executableBlock, view, programs.NewEmptyPrograms())
+	require.NoError(t, err)
+	return computationResult
+}
+
+func CreateAccountCreationTransactions(t *testing.T, chain flow.Chain, numberOfPrivateKeys int, seedArr []uint64) ([]flow.AccountPrivateKey, []flow.TransactionBody) {
+	accountKeys, err := GenerateAccountPrivateKeys(numberOfPrivateKeys, seedArr)
+	require.NoError(t, err)
+	var txs []flow.TransactionBody
+
+	for i := 0; i < len(accountKeys); i++ {
+		keyBytes, err := flow.EncodeRuntimeAccountPublicKey(accountKeys[i].PublicKey(1000))
+		require.NoError(t, err)
+
+		// define the cadence script
+		script := fmt.Sprintf(`
+		transaction {
+		  prepare(signer: AuthAccount) {
+			let acct = AuthAccount(payer: signer)
+			acct.addPublicKey("%s".decodeHex())
+		  }
+		}
+	`, hex.EncodeToString(keyBytes))
+
+		// create the transaction to create the account
+		tx := flow.NewTransactionBody().
+			SetScript([]byte(script)).
+			AddAuthorizer(chain.ServiceAddress())
+
+		txs = append(txs, *tx)
+	}
+	return accountKeys, txs
+}
+
+func SignTransactionAsServiceAccounts(txs []flow.TransactionBody, seqNum uint64, chain flow.Chain) {
+	for i := 0; i < len(txs); i++ {
+		txs[i].SetProposalKey(chain.ServiceAddress(), 0, seqNum)
+		txs[i].SetPayer(chain.ServiceAddress())
+		err := testutil.SignEnvelope(&txs[i], chain.ServiceAddress(), unittest.ServiceAccountPrivateKey)
+		if err != nil {
+			panic(fmt.Errorf("cannot sign envelope: %w", err))
+		}
+	}
 }
