@@ -1,52 +1,66 @@
-package dependency
+package conflicts
 
 import (
 	"fmt"
-	"github.com/onflow/flow-go/engine/execution/state/delta"
+	"github.com/onflow/flow-go/fvm/state"
+	"github.com/onflow/flow-go/model/flow"
 	"sync"
 )
 
-package dependency
-
-import (
-"fmt"
-"github.com/onflow/flow-go/engine/execution/state/delta"
-"github.com/onflow/flow-go/model/flow"
-"sync"
-)
-
-type Dependency struct {
-	transactionViews map[flow.Identifier]*delta.View
+type Conflicts struct {
+	transactionViews map[flow.Identifier]*state.View
 	dependencyGraph  Graph
 	conflicts        []flow.Identifier
+	txChannel        chan Message
 	lock             sync.RWMutex
 }
 
-func (d *Dependency) String() string {
-	return d.dependencyGraph.String()
+type Message struct {
+	TransactionID   flow.Identifier
+	TransactionView *state.View
+	TxIndex         uint32
 }
 
-func NewDependency() *Dependency {
-	return &Dependency{
+func (c *Conflicts) String() string {
+	return c.dependencyGraph.String()
+}
+
+func NewConflicts(txCount int) *Conflicts {
+	return &Conflicts{
 		transactionViews: nil,
 		dependencyGraph:  newGraph(),
 		conflicts:        []flow.Identifier{},
+		txChannel:        make(chan Message, txCount),
 	}
 }
 
-func (d *Dependency) AddTransaction(txID flow.Identifier, txView *delta.View) error {
-	d.lock.Lock()
-	if d.transactionViews == nil {
-		d.transactionViews = make(map[flow.Identifier]*delta.View)
+func (c *Conflicts) AddTransaction(msg Message) {
+	c.txChannel <- msg
+}
+
+func (c *Conflicts) TransactionCount() int {
+	return len(c.transactionViews)
+}
+
+func (c *Conflicts) Run() {
+	for msg := range c.txChannel {
+		c.addTransaction(msg.TransactionID, msg.TransactionView)
 	}
-	d.transactionViews[txID] = txView
-	d.dependencyGraph.addNode(&Node{transaction: txID})
-	d.lock.Unlock()
+}
+
+func (c *Conflicts) Close() {
+	close(c.txChannel)
+}
+
+func (c *Conflicts) addTransaction(txID flow.Identifier, txView *state.View) error {
+	c.lock.Lock()
+	if c.transactionViews == nil {
+		c.transactionViews = make(map[flow.Identifier]*state.View)
+	}
+	c.transactionViews[txID] = txView
+	c.dependencyGraph.addNode(&Node{transaction: txID})
+	c.lock.Unlock()
 	return nil
-}
-
-func (d *Dependency) TransactionCount() int {
-	return len(d.transactionViews)
 }
 
 // Graph adapted from https://flaviocopes.com/golang-data-structure-graph/
@@ -105,4 +119,3 @@ type Node struct {
 func (n *Node) String() string {
 	return fmt.Sprintf("%v", n.transaction)
 }
-

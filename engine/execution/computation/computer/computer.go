@@ -13,6 +13,7 @@ import (
 	"github.com/uber/jaeger-client-go"
 
 	"github.com/onflow/flow-go/engine/execution"
+	"github.com/onflow/flow-go/engine/execution/computation/conflicts"
 	"github.com/onflow/flow-go/engine/execution/state/delta"
 	"github.com/onflow/flow-go/fvm"
 	"github.com/onflow/flow-go/fvm/blueprints"
@@ -185,6 +186,8 @@ func (e *blockComputer) executeBlock(
 		},
 	}
 
+	c := conflicts.NewConflicts(txCountTotal)
+
 	go func() {
 		bc.Run()
 		wg.Done()
@@ -193,6 +196,10 @@ func (e *blockComputer) executeBlock(
 	go func() {
 		eh.Run()
 		wg.Done()
+	}()
+
+	go func() {
+		c.Run()
 	}()
 
 	cResolve := make(chan *execution.ComputationResult, len(collections))
@@ -215,7 +222,7 @@ func (e *blockComputer) executeBlock(
 			Proofs:             make([][]byte, 0),
 		}
 		go func(collectionIndex int, txIndex uint32, collection *entity.CompleteCollection, collectionResult *execution.ComputationResult, collectionView state.View) {
-			e.executeCollection(blockSpan, collectionIndex, txIndex, blockCtx, collectionView, programs, collection, collectionResult, cResolve)
+			e.executeCollection(blockSpan, collectionIndex, txIndex, blockCtx, collectionView, programs, collection, collectionResult, cResolve, c)
 			bc.Commit(collectionView)
 			eh.Hash(collectionResult.Events[collectionIndex], collectionIndex)
 			stateView.MergeView(collectionView)
@@ -235,7 +242,7 @@ func (e *blockComputer) executeBlock(
 	// executing system chunk
 	e.log.Debug().Hex("block_id", logging.Entity(block)).Msg("executing system chunk")
 	colView := stateView.NewChild()
-	_, err = e.executeSystemCollection(blockSpan, collectionIndex, txIndex, systemChunkCtx, colView, programs, res)
+	_, err = e.executeSystemCollection(blockSpan, collectionIndex, txIndex, systemChunkCtx, colView, programs, res, c)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute system chunk transaction: %w", err)
 	}
@@ -249,6 +256,7 @@ func (e *blockComputer) executeBlock(
 	// close the views and wait for all views to be committed
 	close(bc.views)
 	close(eh.data)
+	c.Close()
 	wg.Wait()
 	res.StateReads = stateView.(*delta.View).ReadsCount()
 	res.StateCommitments = stateCommitments
@@ -287,6 +295,7 @@ func (e *blockComputer) executeSystemCollection(
 	collectionView state.View,
 	programs *programs.Programs,
 	res *execution.ComputationResult,
+	conflict *conflicts.Conflicts,
 ) (uint32, error) {
 
 	colSpan := e.tracer.StartSpanFromParent(blockSpan, trace.EXEComputeSystemCollection)
@@ -297,7 +306,7 @@ func (e *blockComputer) executeSystemCollection(
 		return txIndex, fmt.Errorf("could not get system chunk transaction: %w", err)
 	}
 
-	err = e.executeTransaction(tx, colSpan, collectionView, programs, systemChunkCtx, collectionIndex, txIndex, res, true)
+	err = e.executeTransaction(tx, colSpan, collectionView, programs, systemChunkCtx, collectionIndex, txIndex, res, true, conflict)
 	txIndex++
 
 	if err != nil {
@@ -332,6 +341,7 @@ func (e *blockComputer) executeCollection(
 	collection *entity.CompleteCollection,
 	res *execution.ComputationResult,
 	cResolve chan *execution.ComputationResult,
+	conflict *conflicts.Conflicts,
 ) (uint32, error) {
 
 	e.log.Debug().
@@ -353,7 +363,7 @@ func (e *blockComputer) executeCollection(
 
 	txCtx := fvm.NewContextFromParent(blockCtx, fvm.WithMetricsReporter(e.metrics), fvm.WithTracer(e.tracer))
 	for _, txBody := range collection.Transactions {
-		err := e.executeTransaction(txBody, colSpan, collectionView, programs, txCtx, collectionIndex, txIndex, res, false)
+		err := e.executeTransaction(txBody, colSpan, collectionView, programs, txCtx, collectionIndex, txIndex, res, false, conflict)
 		txIndex++
 		if err != nil {
 			return txIndex, err
@@ -384,6 +394,7 @@ func (e *blockComputer) executeTransaction(
 	txIndex uint32,
 	res *execution.ComputationResult,
 	isSystemChunk bool,
+	conflict *conflicts.Conflicts,
 ) error {
 	startedAt := time.Now()
 	txID := txBody.ID()
@@ -427,6 +438,8 @@ func (e *blockComputer) executeTransaction(
 			res.ExecutableBlock.Block.Header.Height,
 			err)
 	}
+
+	conflict.AddTransaction(conflicts.Message{TransactionID: txID, TransactionView: &txView, TxIndex: txIndex})
 
 	txResult := flow.TransactionResult{
 		TransactionID:   tx.ID,
