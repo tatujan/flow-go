@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/onflow/cadence"
 	jsoncdc "github.com/onflow/cadence/encoding/json"
 	"github.com/onflow/flow-go/crypto"
 	"github.com/onflow/flow-go/crypto/hash"
@@ -83,99 +84,130 @@ func (vmt vmTest) run(
 		numCol := 2
 		seeds := []uint64{1, 2, 3, 4}
 
+		transferTokensTx := func(chain flow.Chain) *flow.TransactionBody {
+			fmt.Printf("FungibleToken Addr, Flow Token Addr: %+v, %+v\n", fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain))
+			return flow.NewTransactionBody().
+				SetScript([]byte(fmt.Sprintf(`
+							// This transaction is a template for a transaction that
+							// could be used by anyone to send tokens to another account
+							// that has been set up to receive tokens.
+							//
+							// The withdraw amount and the account from getAccount
+							// would be the parameters to the transaction
+		
+							import FungibleToken from 0x%s
+							import FlowToken from 0x%s
+		
+							transaction(amount: UFix64, to: Address) {
+		
+								// The Vault resource that holds the tokens that are being transferred
+								let sentVault: @FungibleToken.Vault
+		
+								prepare(signer: AuthAccount) {
+		
+									// Get a reference to the signer's stored vault
+									let vaultRef = signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVault)
+										?? panic("Could not borrow reference to the owner's Vault!")
+		
+									// Withdraw tokens from the signer's stored vault
+									self.sentVault <- vaultRef.withdraw(amount: amount)
+									//signer.link<&FlowToken.Vault{FungibleToken.Receiver, FungibleToken.Balance}>(/public/flowTokenReceiver, target: /storage/flowTokenVault)
+								}
+								execute {
+									// Get the recipient's public account object
+									let recipient = getAccount(to)
+								
+									// Create a new empty vault obj.
+									//let vaultRec <- FungibleToken.createEmptyVault()
+
+									// Store the vault in the account storage
+									//recipient.save<@FlowToken.Vault>(<-vaultRec, to: /storage/flowTokenVault)
+
+									//let receiverRef = recipient.link<&FlowToken.Vault{FungibleToken.Receiver, FungibleToken.Balance}>(/public/flowTokenReceiver, target: /storage/flowTokenVault)
+
+									// Get a reference to the recipient's Receiver
+									let receiverRef = recipient.getCapability(/public/flowTokenReceiver)
+										.borrow<&{FungibleToken.Receiver}>()
+										?? panic("Could not borrow receiver reference to the recipient's Vault")
+								
+									// Deposit the withdrawn tokens in the recipient's receiver
+									receiverRef.deposit(from: <-self.sentVault)
+								}
+							}`, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain))),
+				)
+		}
+		fundAccountTx := func(chain flow.Chain) *flow.TransactionBody {
+			return flow.NewTransactionBody().
+				SetScript([]byte(fmt.Sprintf(`
+							import FungibleToken from 0x%s
+							import FlowToken from 0x%s
+							
+							transaction(amount: UFix64, recipient: Address) {
+								let sentVault: @FungibleToken.Vault
+								prepare(signer: AuthAccount) {
+								let vaultRef = signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVault)
+									?? panic("failed to borrow reference to sender vault")
+								self.sentVault <- vaultRef.withdraw(amount: amount)
+								}
+								execute {
+								let receiverRef =  getAccount(recipient)
+									.getCapability(/public/flowTokenReceiver)
+									.borrow<&{FungibleToken.Receiver}>()
+									?? panic("failed to borrow reference to recipient vault")
+								receiverRef.deposit(from: <-self.sentVault)
+								}
+							}`, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain))),
+				)
+		}
+
+		customAddr := new(CustomAddressGenerator)
+
 		chain := flow.Mainnet.Chain()
 		baseOpts := []fvm.Option{
 			fvm.WithChain(chain),
 		}
 		opts := append(baseOpts, vmt.contextOptions...)
 
-		//transferTokensTx := func(chain flow.Chain) *flow.TransactionBody {
-		//	return flow.NewTransactionBody().
-		//		SetScript([]byte(fmt.Sprintf(`
-		//					// This transaction is a template for a transaction that
-		//					// could be used by anyone to send tokens to another account
-		//					// that has been set up to receive tokens.
-		//					//
-		//					// The withdraw amount and the account from getAccount
-		//					// would be the parameters to the transaction
-		//
-		//					import FungibleToken from 0x%s
-		//					import FlowToken from 0x%s
-		//
-		//					transaction(amount: UFix64, to: Address) {
-		//
-		//						// The Vault resource that holds the tokens that are being transferred
-		//						let sentVault: @FungibleToken.Vault
-		//
-		//						prepare(signer: AuthAccount) {
-		//
-		//							// Get a reference to the signer's stored vault
-		//							let vaultRef = signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVault)
-		//								?? panic("Could not borrow reference to the owner's Vault!")
-		//
-		//							// Withdraw tokens from the signer's stored vault
-		//							self.sentVault <- vaultRef.withdraw(amount: amount)
-		//						}
-		//
-		//						execute {
-		//
-		//							// Get the recipient's public account object
-		//							let recipient = getAccount(to)
-		//
-		//							// Get a reference to the recipient's Receiver
-		//							let receiverRef = recipient.getCapability(/public/flowTokenReceiver)
-		//								.borrow<&{FungibleToken.Receiver}>()
-		//								?? panic("Could not borrow receiver reference to the recipient's Vault")
-		//
-		//							// Deposit the withdrawn tokens in the recipient's receiver
-		//							receiverRef.deposit(from: <-self.sentVault)
-		//						}
-		//					}`, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain))),
-		//		)
-		//}
-
 		// ==== Create an account ====
 		privateKeys, createAccountTxs := CreateAccountCreationTransactions(t, chain, numCol*numTxPerCol, seeds)
-		fmt.Sprint(len(privateKeys))
 		// this should return the address of newly created account
-		//address, err := chain.AddressAtIndex(5)
-		//require.NoError(t, err)
+		addresses, err := customAddr.AddressAtIndexes(seeds)
+		require.NoError(t, err)
 
 		SignTransactionAsServiceAccounts(createAccountTxs, 0, chain)
-		//require.NoError(t, err)
+		require.NoError(t, err)
 
-		//// ==== Transfer tokens to new account ====
-		//transferTx := transferTokensTx(chain).
-		//	AddAuthorizer(chain.ServiceAddress()).
-		//	AddArgument(jsoncdc.MustEncode(cadence.UFix64(1000))).
-		//	AddArgument(jsoncdc.MustEncode(cadence.NewAddress(address)))
-		//
-		//transferTx.SetProposalKey(chain.ServiceAddress(), 0, 1)
-		//transferTx.SetPayer(chain.ServiceAddress())
-		//
-		//err = testutil.SignEnvelope(
-		//	transferTx,
-		//	chain.ServiceAddress(),
-		//	unittest.ServiceAccountPrivateKey,
-		//)
-		//require.NoError(t, err)
-		//
-		//// ==== Transfer tokens from new account ====
-		//
-		//transferTx2 := transferTokensTx(chain).
-		//	AddAuthorizer(address).
-		//	AddArgument(jsoncdc.MustEncode(cadence.UFix64(tc.tryToTransfer))).
-		//	AddArgument(jsoncdc.MustEncode(cadence.NewAddress(chain.ServiceAddress())))
-		//
-		//transferTx2.SetProposalKey(address, 0, 0)
-		//transferTx2.SetPayer(address)
-		//
-		//err = testutil.SignEnvelope(
-		//	transferTx2,
-		//	address,
-		//	privateKey,
-		//)
-		//require.NoError(t, err)
+		// ==== Transfer tokens to new account ====
+		transferTx := fundAccountTx(chain).
+			AddAuthorizer(chain.ServiceAddress()).
+			AddArgument(jsoncdc.MustEncode(cadence.UFix64(10))).
+			AddArgument(jsoncdc.MustEncode(cadence.NewAddress(addresses[0])))
+
+		transferTx.SetProposalKey(chain.ServiceAddress(), 0, uint64(len(createAccountTxs)))
+		transferTx.SetPayer(chain.ServiceAddress())
+
+		err = testutil.SignEnvelope(
+			transferTx,
+			chain.ServiceAddress(),
+			unittest.ServiceAccountPrivateKey,
+		)
+		require.NoError(t, err)
+
+		// ==== Transfer tokens from new account ====
+		transferTx2 := transferTokensTx(chain).
+			AddAuthorizer(addresses[0]).
+			AddArgument(jsoncdc.MustEncode(cadence.UFix64(4))).
+			AddArgument(jsoncdc.MustEncode(cadence.NewAddress(chain.ServiceAddress())))
+
+		transferTx2.SetProposalKey(addresses[0], 0, uint64(len(createAccountTxs)+1))
+		transferTx2.SetPayer(addresses[0])
+
+		err = testutil.SignEnvelope(
+			transferTx2,
+			addresses[0],
+			privateKeys[0],
+		)
+		require.NoError(t, err)
 
 		bootstrpOpts := []fvm.BootstrapProcedureOption{
 			fvm.WithInitialTokenSupply(unittest.GenesisTokenSupply),
@@ -186,6 +218,8 @@ func (vmt vmTest) run(
 			{&createAccountTxs[1]},
 			{&createAccountTxs[2]},
 			{&createAccountTxs[3]},
+			{transferTx},
+			{transferTx2},
 		}, chain, opts, bootstrpOpts)
 
 		fmt.Sprint(cr.ComputationUsed)
@@ -463,6 +497,34 @@ func (e *CustomAddressGenerator) AddressCount() uint64 {
 	panic("not implemented")
 }
 
+func (e *CustomAddressGenerator) AddressAtIndexes(seeds []uint64) ([]flow.Address, error) {
+	max := findSlicesMax(seeds)
+	if max > uint64(maxIndex) {
+		return make([]flow.Address, len(seeds)), fmt.Errorf("index must be less or equal to %x", maxIndex)
+	}
+	addresses := []flow.Address{}
+	for i := 0; i < len(seeds); i++ {
+		cust := e.initAtIndex(seeds[i])
+		addresses = append(addresses, cust.CurrentAddress())
+	}
+	return addresses, nil
+}
+
+func findSlicesMax(arr []uint64) uint64 {
+	var biggest uint64
+	if len(arr) == 0 {
+		fmt.Println("Array must be non empty")
+	} else {
+		biggest = arr[0]
+		for _, v := range arr {
+			if v > biggest {
+				biggest = v
+			}
+		}
+	}
+	return biggest
+}
+
 func convertJSONToCSV(sourceFile *os.File, outputFile *os.File) (int, error) {
 	linesWritten := 0
 	// struct with all possible fields for log messages
@@ -661,13 +723,39 @@ func CreateAccountCreationTransactions(t *testing.T, chain flow.Chain, numberOfP
 
 		// define the cadence script
 		script := fmt.Sprintf(`
+		// This transaction is a template for a transaction
+		// to add a Vault resource to their account
+		// so that they can use the flowToken
+		
+		import FungibleToken from 0x%s
+		import FlowToken from 0x%s
+		
 		transaction {
-		  prepare(signer: AuthAccount) {
-			let acct = AuthAccount(payer: signer)
-			acct.addPublicKey("%s".decodeHex())
-		  }
+		
+			prepare(signer: AuthAccount) {
+				let acct = AuthAccount(payer: signer)
+				acct.addPublicKey("%s".decodeHex())
+				if signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVault) == nil {
+					// Create a new flowToken Vault and put it in storage
+					signer.save(<-FlowToken.createEmptyVault(), to: /storage/flowTokenVault)
+		
+					// Create a public capability to the Vault that only exposes
+					// the deposit function through the Receiver interface
+					signer.link<&FlowToken.Vault{FungibleToken.Receiver}>(
+						/public/flowTokenReceiver,
+						target: /storage/flowTokenVault
+					)
+		
+					// Create a public capability to the Vault that only exposes
+					// the balance field through the Balance interface
+					signer.link<&FlowToken.Vault{FungibleToken.Balance}>(
+						/public/flowTokenBalance,
+						target: /storage/flowTokenVault
+					)
+				}
+			}
 		}
-	`, hex.EncodeToString(keyBytes))
+	`, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain), hex.EncodeToString(keyBytes))
 
 		// create the transaction to create the account
 		tx := flow.NewTransactionBody().
@@ -687,5 +775,6 @@ func SignTransactionAsServiceAccounts(txs []flow.TransactionBody, seqNum uint64,
 		if err != nil {
 			panic(fmt.Errorf("cannot sign envelope: %w", err))
 		}
+		seqNum++
 	}
 }
