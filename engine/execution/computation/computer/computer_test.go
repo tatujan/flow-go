@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/onflow/cadence"
 	"github.com/onflow/cadence/runtime"
@@ -230,7 +232,11 @@ func TestBlockExecutor_ExecuteBlock(t *testing.T) {
 			return nil, nil
 		})
 
+		blockExecutionStart := time.Now()
 		result, err := exe.ExecuteBlock(context.Background(), block, view, programs)
+		blockExecutionTime := time.Since(blockExecutionStart)
+		printBlockExecutionTime(block.ID().String(), blockExecutionTime)
+
 		assert.NoError(t, err)
 
 		// chunk count should match collection count
@@ -843,4 +849,11 @@ func blockCopy(oldBlock *entity.ExecutableBlock) *entity.ExecutableBlock {
 	newBlock.StartState = oldBlock.StartState
 	newBlock.Executing = oldBlock.Executing
 	return newBlock
+}
+
+func printBlockExecutionTime(blockID string, blockExecutionTime time.Duration) {
+	msg := "***  Block " + blockID + " executed in: " + blockExecutionTime.String() + "  ***"
+	println("\n" + strings.Repeat("*", len(msg)))
+	println(msg)
+	println(strings.Repeat("*", len(msg)) + "\n")
 }
