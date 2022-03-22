@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/dgraph-io/badger/v2"
@@ -39,8 +40,8 @@ type NodeBuilder interface {
 	// ExtraFlags reads the node specific command line arguments and adds it to the FlagSet
 	ExtraFlags(f func(*pflag.FlagSet)) NodeBuilder
 
-	// ParseAndPrintFlags parses all the command line arguments
-	ParseAndPrintFlags()
+	// ParseAndPrintFlags parses and validates all the command line arguments
+	ParseAndPrintFlags() error
 
 	// Initialize performs all the initialization needed at the very start of a node
 	Initialize() error
@@ -100,7 +101,7 @@ type NodeBuilder interface {
 	// RegisterBadgerMetrics registers all badger related metrics
 	RegisterBadgerMetrics() error
 
-	// ValidateFlags is an extra method called after parsing flags, intended for extra check of flag validity
+	// ValidateFlags sets any custom validation rules for the command line flags,
 	// for example where certain combinations aren't allowed
 	ValidateFlags(func() error) NodeBuilder
 }
@@ -124,6 +125,7 @@ type BaseConfig struct {
 	datadir                         string
 	secretsdir                      string
 	secretsDBEnabled                bool
+	InsecureSecretsDB               bool
 	level                           string
 	metricsPort                     uint
 	BootstrapDir                    string
@@ -134,9 +136,10 @@ type BaseConfig struct {
 	profilerDir                     string
 	profilerInterval                time.Duration
 	profilerDuration                time.Duration
+	profilerMemProfileRate          int
 	tracerEnabled                   bool
 	tracerSensitivity               uint
-	metricsEnabled                  bool
+	MetricsEnabled                  bool
 	guaranteesCacheSize             uint
 	receiptsCacheSize               uint
 	db                              *badger.DB
@@ -214,9 +217,10 @@ func DefaultBaseConfig() *BaseConfig {
 		profilerDir:                     "profiler",
 		profilerInterval:                15 * time.Minute,
 		profilerDuration:                10 * time.Second,
+		profilerMemProfileRate:          runtime.MemProfileRate,
 		tracerEnabled:                   false,
 		tracerSensitivity:               4,
-		metricsEnabled:                  true,
+		MetricsEnabled:                  true,
 		receiptsCacheSize:               bstorage.DefaultCacheSize,
 		guaranteesCacheSize:             bstorage.DefaultCacheSize,
 		NetworkReceivedMessageCacheSize: p2p.DefaultCacheSize,
