@@ -116,6 +116,7 @@ func (e *blockComputer) executeBlock(
 	stateView state.View,
 	programs *programs.Programs,
 ) (*execution.ComputationResult, error) {
+	startedAt := time.Now()
 
 	// check the start state is set
 	if !block.HasStartState() {
@@ -252,6 +253,18 @@ func (e *blockComputer) executeBlock(
 	res.StateCommitments = stateCommitments
 	res.Proofs = proofs
 	res.TrieUpdates = trieUpdates
+
+	elapsedTimeNS := time.Since(startedAt)
+	e.log.Info().Hex("block_id", logging.Entity(blockCtx.BlockHeader)).
+		Int("numberOfTransactions", len(res.TransactionResults)).
+		Int64("timeSpentInNS", elapsedTimeNS.Nanoseconds()).
+		Timestamp().
+		Msg("Block executed")
+
+	msg := "***  Block " + block.ID().String() + " executed in: " + elapsedTimeNS.String() + "  ***"
+	println("\n" + strings.Repeat("*", len(msg)))
+	println(msg)
+	println(strings.Repeat("*", len(msg)) + "\n")
 
 	return res, nil
 }
