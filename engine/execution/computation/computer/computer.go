@@ -442,6 +442,7 @@ func (e *blockComputer) executeTransaction(
 		conflict.StoreTransaction(
 			conflicts.Transaction{
 				TransactionID:    txID,
+				CollectionID:     collectionID,
 				RegisterTouchSet: conflictView.AllRegisters(),
 				TxIndex:          txIndex},
 		)
