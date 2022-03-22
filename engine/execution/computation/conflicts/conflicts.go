@@ -2,23 +2,28 @@ package conflicts
 
 import (
 	"fmt"
-	"github.com/onflow/flow-go/fvm/state"
 	"github.com/onflow/flow-go/model/flow"
 	"sync"
 )
 
 type Conflicts struct {
-	transactionViews map[flow.Identifier]*state.View
-	dependencyGraph  Graph
-	conflicts        []flow.Identifier
-	txChannel        chan Message
-	lock             sync.RWMutex
+	transactions            []Transaction
+	totalRegisterTouchSet   map[flow.RegisterID][]Transaction
+	dependencyGraph         Graph
+	conflictingTransactions map[flow.Identifier]Transaction
+	txChannel               chan Transaction
+	lock                    sync.RWMutex
 }
 
-type Message struct {
-	TransactionID   flow.Identifier
-	TransactionView *state.View
-	TxIndex         uint32
+type Transaction struct {
+	TransactionID    flow.Identifier
+	CollectionID     flow.Identifier
+	RegisterTouchSet []flow.RegisterID
+	TxIndex          uint32
+}
+
+func (t *Transaction) String() string {
+	return t.TransactionID.String()
 }
 
 func (c *Conflicts) String() string {
@@ -27,53 +32,94 @@ func (c *Conflicts) String() string {
 
 func NewConflicts(txCount int) *Conflicts {
 	return &Conflicts{
-		transactionViews: nil,
-		dependencyGraph:  newGraph(),
-		conflicts:        []flow.Identifier{},
-		txChannel:        make(chan Message, txCount),
+		transactions:            make([]Transaction, txCount),
+		totalRegisterTouchSet:   make(map[flow.RegisterID][]Transaction),
+		dependencyGraph:         newGraph(),
+		conflictingTransactions: make(map[flow.Identifier]Transaction),
+		txChannel:               make(chan Transaction, txCount),
 	}
 }
 
-func (c *Conflicts) AddTransaction(msg Message) {
-	c.txChannel <- msg
+func (c *Conflicts) StoreTransaction(tx Transaction) {
+	c.txChannel <- tx
+}
+
+func (c *Conflicts) AddConflictingTransaction(tx Transaction, conflicts []Transaction) {
+	txID := tx.TransactionID
+	c.conflictingTransactions[txID] = tx
+	g := c.dependencyGraph
+	if !g.Contains(txID) {
+		g.AddNode(txID)
+	}
+	for _, conflict := range conflicts {
+		conflictID := conflict.TransactionID
+		if !g.Contains(conflictID) {
+			g.AddNode(conflictID)
+		}
+		g.AddDirectedEdge(conflictID, txID)
+	}
+}
+
+func (c *Conflicts) InTransactionConflicts(tx Transaction) bool {
+	_, inMap := c.conflictingTransactions[tx.TransactionID]
+	return inMap
 }
 
 func (c *Conflicts) TransactionCount() int {
-	return len(c.transactionViews)
+	return len(c.transactions)
 }
 
 func (c *Conflicts) Run() {
-	for msg := range c.txChannel {
-		c.addTransaction(msg.TransactionID, msg.TransactionView)
+	for tx := range c.txChannel {
+		c.transactions[tx.TxIndex] = tx
+		c.transactions[tx.TxIndex] = tx
 	}
+	c.buildDependencyGraph()
+}
+
+func (c *Conflicts) buildDependencyGraph() {
+	for _, tx := range c.transactions {
+		conflicts := c.collectConflicts(tx)
+		if len(conflicts) > 0 {
+			c.AddConflictingTransaction(tx, conflicts)
+		}
+	}
+}
+
+func (c *Conflicts) collectConflicts(tx Transaction) []Transaction {
+	var conflicts []Transaction
+	for _, register := range tx.RegisterTouchSet {
+		// for each register tx touches, check if it has already been touched by previous transactionNode
+		registerTouches, registerExists := c.totalRegisterTouchSet[register]
+		if registerExists {
+			// if it has been touched previously, check if the transactionNode that previously touched it are from a different collection or are already in the list of conflicts
+			for _, transaction := range registerTouches {
+				if transaction.CollectionID != tx.CollectionID || c.InTransactionConflicts(transaction) {
+					conflicts = append(conflicts, transaction)
+				}
+			}
+		}
+	}
+	return conflicts
 }
 
 func (c *Conflicts) Close() {
 	close(c.txChannel)
 }
 
-func (c *Conflicts) addTransaction(txID flow.Identifier, txView *state.View) error {
-	c.lock.Lock()
-	if c.transactionViews == nil {
-		c.transactionViews = make(map[flow.Identifier]*state.View)
-	}
-	c.transactionViews[txID] = txView
-	c.dependencyGraph.addNode(&Node{transaction: txID})
-	c.lock.Unlock()
-	return nil
-}
-
 // Graph adapted from https://flaviocopes.com/golang-data-structure-graph/
 type Graph struct {
-	nodes []*Node
-	edges map[Node][]*Node
-	lock  sync.RWMutex
+	transactionNode map[flow.Identifier]*Node
+	nodes           []*Node
+	edges           map[Node][]*Node
+	lock            sync.RWMutex
 }
 
 func newGraph() Graph {
 	return Graph{
-		nodes: []*Node{},
-		edges: nil,
+		transactionNode: make(map[flow.Identifier]*Node),
+		nodes:           []*Node{},
+		edges:           nil,
 	}
 }
 
@@ -98,18 +144,27 @@ func (g *Graph) String() string {
 	return str
 }
 
-func (g *Graph) addNode(n *Node) {
+func (g *Graph) AddNode(txID flow.Identifier) {
 	g.lock.Lock()
-	g.nodes = append(g.nodes, n)
+	node := &Node{transaction: txID}
+	g.transactionNode[txID] = node
+	g.nodes = append(g.nodes, node)
 	g.lock.Unlock()
 }
-func (g *Graph) addDirectedEdge(n1, n2 *Node) {
+func (g *Graph) AddDirectedEdge(tx1, tx2 flow.Identifier) {
 	g.lock.Lock()
 	if g.edges == nil {
 		g.edges = make(map[Node][]*Node)
 	}
+	n1 := g.transactionNode[tx1]
+	n2 := g.transactionNode[tx2]
 	g.edges[*n1] = append(g.edges[*n1], n2)
 	g.lock.Unlock()
+}
+
+func (g *Graph) Contains(txID flow.Identifier) bool {
+	_, inMap := g.transactionNode[txID]
+	return inMap
 }
 
 type Node struct {
