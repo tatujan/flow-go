@@ -304,7 +304,7 @@ func (e *blockComputer) executeSystemCollection(
 		return txIndex, fmt.Errorf("could not get system chunk transaction: %w", err)
 	}
 
-	err = e.executeTransaction(tx, colSpan, collectionView, programs, systemChunkCtx, collectionIndex, txIndex, res, true, conflict)
+	err = e.executeTransaction(tx, colSpan, collectionView, programs, systemChunkCtx, flow.Identifier{}, collectionIndex, txIndex, res, true, conflict)
 	txIndex++
 
 	if err != nil {
@@ -361,7 +361,7 @@ func (e *blockComputer) executeCollection(
 
 	txCtx := fvm.NewContextFromParent(blockCtx, fvm.WithMetricsReporter(e.metrics), fvm.WithTracer(e.tracer))
 	for _, txBody := range collection.Transactions {
-		err := e.executeTransaction(txBody, colSpan, collectionView, programs, txCtx, collectionIndex, txIndex, res, false, conflict)
+		err := e.executeTransaction(txBody, colSpan, collectionView, programs, txCtx, collection.Guarantee.CollectionID, collectionIndex, txIndex, res, false, conflict)
 		txIndex++
 		if err != nil {
 			return txIndex, err
@@ -388,6 +388,7 @@ func (e *blockComputer) executeTransaction(
 	collectionView state.View,
 	programs *programs.Programs,
 	ctx fvm.Context,
+	collectionID flow.Identifier,
 	collectionIndex int,
 	txIndex uint32,
 	res *execution.ComputationResult,
@@ -436,8 +437,15 @@ func (e *blockComputer) executeTransaction(
 			res.ExecutableBlock.Block.Header.Height,
 			err)
 	}
-
-	conflict.AddTransaction(conflicts.Message{TransactionID: txID, TransactionView: &txView, TxIndex: txIndex})
+	conflictView, ok := txView.(*delta.View)
+	if ok && !isSystemChunk {
+		conflict.StoreTransaction(
+			conflicts.Transaction{
+				TransactionID:    txID,
+				RegisterTouchSet: conflictView.AllRegisters(),
+				TxIndex:          txIndex},
+		)
+	}
 
 	txResult := flow.TransactionResult{
 		TransactionID:   tx.ID,
