@@ -32,6 +32,23 @@ func TestTransactionConflictGraph(t *testing.T) {
 		require.Equal(t, numTx, c.TransactionCount())
 	})
 
+	t.Run("No conflicts for non-conflicting transactions", func(t *testing.T) {
+		c := conflicts.NewConflicts(numTx)
+		cDone := make(chan bool, 1)
+		go func() {
+			c.Run()
+			cDone <- true
+		}()
+
+		for n := 0; n < numTx; n++ {
+			c.StoreTransaction(nonConflictingTransactions[n])
+		}
+		c.Close()
+		<-cDone
+		require.Equal(t, 0, c.ConflictCount())
+
+	})
+
 	t.Run("Transactions touching same register in different collections are conflicting", func(t *testing.T) {
 		conflictingTransactions := nonConflictingTransactions
 		// set first tx touchset to be the same as the second
