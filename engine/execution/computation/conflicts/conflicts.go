@@ -88,9 +88,6 @@ func (c *Conflicts) buildDependencyGraph() {
 // collectConflicts returns a list of previous transactions that conflict with transaction tx. This
 func (c *Conflicts) collectConflicts(tx Transaction) TransactionSet {
 	var conflicts = NewTransactionSet()
-	var strConflicts []string
-	txStr := tx.TransactionID.String()
-	print(txStr)
 	for _, register := range tx.RegisterTouchSet {
 		registerTouches, registerExists := c.totalRegisterTouchSet[register]
 		if registerExists {
@@ -100,7 +97,6 @@ func (c *Conflicts) collectConflicts(tx Transaction) TransactionSet {
 				if transaction.CollectionID != tx.CollectionID || c.InTransactionConflicts(transaction) {
 					// if so, that transaction is a conflict. Add to list of conflicts with tx
 					conflicts.Add(transaction)
-					strConflicts = append(strConflicts, transaction.TransactionID.String())
 				}
 			}
 			// add current tx to the list of Transactions that have touched register
