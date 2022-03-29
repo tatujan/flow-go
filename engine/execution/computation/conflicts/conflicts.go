@@ -40,71 +40,99 @@ func NewConflicts(txCount int) *Conflicts {
 	}
 }
 
+// StoreTransaction is the public function that enables adding transactions to the conflict aggregator
 func (c *Conflicts) StoreTransaction(tx Transaction) {
 	c.txChannel <- tx
 }
 
-func (c *Conflicts) AddConflictingTransaction(tx Transaction, conflicts []Transaction) {
-	txID := tx.TransactionID
-	c.conflictingTransactions[txID] = tx
-	g := c.dependencyGraph
-	if !g.Contains(txID) {
-		g.AddNode(txID)
-	}
-	for _, conflict := range conflicts {
-		conflictID := conflict.TransactionID
-		if !g.Contains(conflictID) {
-			g.AddNode(conflictID)
-		}
-		g.AddDirectedEdge(conflictID, txID)
-	}
+// TransactionCount returns the number of transactions the conflict object is aware of
+func (c *Conflicts) TransactionCount() int {
+	return len(c.transactions)
 }
 
+// TransactionCount returns the number of transactions the conflict object is aware of
+func (c *Conflicts) ConflictCount() int {
+	return len(c.conflictingTransactions)
+}
+
+// InTransactionConflicts returns true if the tx is in c.conflictingTransactions
 func (c *Conflicts) InTransactionConflicts(tx Transaction) bool {
 	_, inMap := c.conflictingTransactions[tx.TransactionID]
 	return inMap
 }
 
-func (c *Conflicts) TransactionCount() int {
-	return len(c.transactions)
-}
-
+// Run receives transactions and adds them to the list of transactions. When finished receiving transactions, it builds
+// the dependency graph.
 func (c *Conflicts) Run() {
 	for tx := range c.txChannel {
-		c.transactions[tx.TxIndex] = tx
 		c.transactions[tx.TxIndex] = tx
 	}
 	c.buildDependencyGraph()
 }
 
+func (c *Conflicts) Close() {
+	close(c.txChannel)
+}
+
+// buildDependencyGraph iterates over all added transactions one at a time, aggregates conflicts with previous
+// transactions,
 func (c *Conflicts) buildDependencyGraph() {
 	for _, tx := range c.transactions {
 		conflicts := c.collectConflicts(tx)
-		if len(conflicts) > 0 {
-			c.AddConflictingTransaction(tx, conflicts)
+		if !conflicts.Empty() {
+			c.addConflictingTransaction(tx, conflicts)
 		}
 	}
 }
 
-func (c *Conflicts) collectConflicts(tx Transaction) []Transaction {
-	var conflicts []Transaction
+// collectConflicts returns a list of previous transactions that conflict with transaction tx. This
+func (c *Conflicts) collectConflicts(tx Transaction) TransactionSet {
+	var conflicts = NewTransactionSet()
+	var strConflicts []string
+	txStr := tx.TransactionID.String()
+	print(txStr)
 	for _, register := range tx.RegisterTouchSet {
-		// for each register tx touches, check if it has already been touched by previous transactionNode
 		registerTouches, registerExists := c.totalRegisterTouchSet[register]
 		if registerExists {
-			// if it has been touched previously, check if the transactionNode that previously touched it are from a different collection or are already in the list of conflicts
+			// if it has been touched previously, check if the transactionNode that previously touched it are from a
+			// different collection or are already in the list of conflicts
 			for _, transaction := range registerTouches {
 				if transaction.CollectionID != tx.CollectionID || c.InTransactionConflicts(transaction) {
-					conflicts = append(conflicts, transaction)
+					// if so, that transaction is a conflict. Add to list of conflicts with tx
+					conflicts.Add(transaction)
+					strConflicts = append(strConflicts, transaction.TransactionID.String())
 				}
 			}
+			// add current tx to the list of Transactions that have touched register
+			c.totalRegisterTouchSet[register] = append(c.totalRegisterTouchSet[register], tx)
+		} else {
+			// if register has not been touched yet, initialize the list of transactions with current tx
+			c.totalRegisterTouchSet[register] = []Transaction{tx}
 		}
 	}
 	return conflicts
 }
 
-func (c *Conflicts) Close() {
-	close(c.txChannel)
+// addConflictingTransaction takes a conflicts.Transaction type and a list of other Transactions it conflicts with and
+// adds those conflicts to the dependency graph
+func (c *Conflicts) addConflictingTransaction(tx Transaction, conflicts TransactionSet) {
+	txID := tx.TransactionID
+	// store conflict transaction value using the txID as key
+	c.conflictingTransactions[txID] = tx
+	g := c.dependencyGraph
+	// if the tx is not already in graph, add node
+	if !g.Contains(txID) {
+		g.AddNode(txID)
+	}
+	// for each transaction that conflicts with tx, add a directed edge from that conflict to tx
+	for _, tx := range conflicts.IterableMap() {
+		conflictID := tx.TransactionID
+		// if the conflict does not already exist in the graph, add it.
+		if !g.Contains(conflictID) {
+			g.AddNode(conflictID)
+		}
+		g.AddDirectedEdge(conflictID, txID)
+	}
 }
 
 // Graph adapted from https://flaviocopes.com/golang-data-structure-graph/
@@ -173,4 +201,41 @@ type Node struct {
 
 func (n *Node) String() string {
 	return fmt.Sprintf("%v", n.transaction)
+}
+
+// Following code adapted from https://www.davidkaya.com/sets-in-golang/
+
+// TransactionSet stores transactions via their ID string representation
+type TransactionSet struct {
+	m map[string]Transaction
+}
+
+func NewTransactionSet() TransactionSet {
+	s := TransactionSet{}
+	s.m = make(map[string]Transaction)
+	return s
+}
+
+func (s *TransactionSet) Add(tx Transaction) {
+	value := tx.TransactionID.String()
+	s.m[value] = tx
+}
+
+func (s *TransactionSet) Remove(tx Transaction) {
+	id := tx.TransactionID.String()
+	delete(s.m, id)
+}
+
+func (s *TransactionSet) Contains(tx Transaction) bool {
+	id := tx.TransactionID.String()
+	_, c := s.m[id]
+	return c
+}
+
+func (s *TransactionSet) Empty() bool {
+	return len(s.m) == 0
+}
+
+func (s *TransactionSet) IterableMap() map[string]Transaction {
+	return s.m
 }
