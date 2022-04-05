@@ -46,14 +46,13 @@ func TestTransactionConflictGraph(t *testing.T) {
 		c.Close()
 		<-cDone
 		require.Equal(t, 0, c.ConflictCount())
-
 	})
 
 	t.Run("Transactions touching same register in different collections are conflicting", func(t *testing.T) {
 		conflictingTransactions := nonConflictingTransactions
 		// set first tx touchset to be the same as the second
 		conflictingTransactions[1].RegisterTouchSet = conflictingTransactions[0].RegisterTouchSet
-		// set the registers touched by the lst tx to be the same registers touched by the second to last
+		// set the registers touched by the last tx to be the same registers touched by the second to last
 		conflictingTransactions[numTx-1].RegisterTouchSet = conflictingTransactions[numTx-2].RegisterTouchSet
 
 		conflictingTx1 := conflictingTransactions[1]
@@ -71,8 +70,13 @@ func TestTransactionConflictGraph(t *testing.T) {
 		}
 		c.Close()
 		<-cDone
-		require.True(t, c.containsNode(conflictingTx1.TransactionID))
-		require.True(t, c.containsNode(conflictingTx2.TransactionID))
+		for _, printTx := range conflictingTransactions {
+			idStr := printTx.TransactionID.String()
+			print("Tx index: ", printTx.TxIndex, " Tx ID: ", idStr[len(idStr)-6:], "\n")
+		}
+		print("\n" + c.String() + "\n")
+		require.True(t, c.IsConflict(conflictingTx1.TransactionID))
+		require.True(t, c.IsConflict(conflictingTx2.TransactionID))
 		require.Equal(t, 2, c.ConflictCount())
 
 	})

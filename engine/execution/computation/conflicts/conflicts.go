@@ -39,11 +39,14 @@ func (c *Conflicts) String() string {
 	str := ""
 	if len(c.dependencyGraph) > 0 {
 		for node, edges := range c.dependencyGraph {
-			str += node.String()
+			nodeStr := node.String()
+			str += nodeStr[len(nodeStr)-8:]
 			if len(edges) > 0 {
 				str += " -> "
 				for j := 0; j < len(edges); j++ {
-					str += edges[j].String() + " "
+					edgeStr := edges[j].String()
+					edgeStr = edgeStr[len(edgeStr)-8:]
+					str += edgeStr + " "
 				}
 			}
 			str += "\n"
@@ -111,7 +114,7 @@ func (c *Conflicts) determineConflicts(tx Transaction) TransactionSet {
 			// if it has been touched previously, check if the transaction that previously touched it are from a
 			// different collection or are already in the list of conflicts
 			for _, transaction := range registerTouches {
-				if transaction.CollectionID != tx.CollectionID || c.isConflict(transaction.TransactionID) {
+				if transaction.CollectionID != tx.CollectionID || c.IsConflict(transaction.TransactionID) {
 					// if so, that transaction is a conflict. Add to list of conflicts with tx
 					conflicts.Add(transaction)
 				}
@@ -145,7 +148,7 @@ func (c *Conflicts) addToConflictGraph(txID flow.Identifier, conflicts Transacti
 }
 
 // a transaction is a conflict if it exists as a node in the dependency graph and has edges leading to other nodes.
-func (c *Conflicts) isConflict(txID flow.Identifier) bool {
+func (c *Conflicts) IsConflict(txID flow.Identifier) bool {
 	edges, inMap := c.dependencyGraph[txID]
 	return inMap && len(edges) > 0
 }
@@ -236,7 +239,7 @@ func (c *Conflicts) removeDirectedEdge(tx1, tx2 flow.Identifier) error {
 // indexOfNodeInEdges checks a list of tx for membership. If exists, index of tx is returned, else -1.
 func indexOfNodeInEdges(tx flow.Identifier, edges []flow.Identifier) int {
 	for index, edge := range edges {
-		if tx.String() == edge.String() {
+		if tx == edge {
 			return index
 		}
 	}
