@@ -16,7 +16,20 @@ func TestTransactionConflictGraph(t *testing.T) {
 	registers := createRegisters(numRegisters)
 	nonConflictingTransactions := createNonConflictingTransactions(numTx, registers)
 
-	t.Run("Transactions added successfully", func(t *testing.T) {
+	t.Run("New conflicts object generated correctly", func(t *testing.T) {
+		c := conflicts.NewConflicts(numTx)
+		cDone := make(chan bool, 1)
+		go func() {
+			c.Run()
+			cDone <- true
+		}()
+		c.Close()
+		<-cDone
+		graph := c.String()
+		print(graph)
+	})
+
+	t.Run("Transactions add successfully", func(t *testing.T) {
 		c := conflicts.NewConflicts(numTx)
 		cDone := make(chan bool, 1)
 		go func() {

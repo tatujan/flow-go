@@ -78,15 +78,15 @@ func (c *Conflicts) Close() {
 // transactions,
 func (c *Conflicts) buildDependencyGraph() {
 	for _, tx := range c.transactions {
-		conflicts := c.collectConflicts(tx)
+		conflicts := c.getConflicts(tx)
 		if !conflicts.Empty() {
-			c.addConflictingTransaction(tx, conflicts)
+			c.addToConflictGraph(tx, conflicts)
 		}
 	}
 }
 
-// collectConflicts returns a list of previous transactions that conflict with transaction tx. This
-func (c *Conflicts) collectConflicts(tx Transaction) TransactionSet {
+// getConflicts returns a list of previous transactions that conflict with transaction tx. This
+func (c *Conflicts) getConflicts(tx Transaction) TransactionSet {
 	var conflicts = NewTransactionSet()
 	for _, register := range tx.RegisterTouchSet {
 		registerTouches, registerExists := c.totalRegisterTouchSet[register]
@@ -109,25 +109,25 @@ func (c *Conflicts) collectConflicts(tx Transaction) TransactionSet {
 	return conflicts
 }
 
-// addConflictingTransaction takes a conflicts.Transaction type and a list of other Transactions it conflicts with and
+// addToConflictGraph takes a conflicts.Transaction type and a list of other Transactions it conflicts with and
 // adds those conflicts to the dependency graph
-func (c *Conflicts) addConflictingTransaction(tx Transaction, conflicts TransactionSet) {
+func (c *Conflicts) addToConflictGraph(tx Transaction, conflicts TransactionSet) {
 	txID := tx.TransactionID
 	// store conflict transaction value using the txID as key
 	c.conflictingTransactions[txID] = tx
 	g := c.dependencyGraph
 	// if the tx is not already in graph, add node
 	if !g.Contains(txID) {
-		g.AddNode(txID)
+		g.addNode(txID)
 	}
 	// for each transaction that conflicts with tx, add a directed edge from that conflict to tx
 	for _, tx := range conflicts.IterableMap() {
 		conflictID := tx.TransactionID
 		// if the conflict does not already exist in the graph, add it.
 		if !g.Contains(conflictID) {
-			g.AddNode(conflictID)
+			g.addNode(conflictID)
 		}
-		g.AddDirectedEdge(conflictID, txID)
+		g.addDirectedEdge(conflictID, txID)
 	}
 }
 
@@ -143,52 +143,50 @@ func newGraph() Graph {
 	return Graph{
 		transactionNode: make(map[flow.Identifier]*Node),
 		nodes:           []*Node{},
-		edges:           nil,
+		edges:           make(map[Node][]*Node),
 	}
 }
 
-func (g *Graph) String() string {
-	g.lock.RLock()
-	str := ""
-	if len(g.nodes) > 0 {
-		for i := 0; i < len(g.nodes); i++ {
-			str += g.nodes[i].String()
-			edges := g.edges[*g.nodes[i]]
-			if len(edges) > 0 {
-				str += " -> "
-				for j := 0; j < len(edges); j++ {
-					str += edges[j].String() + " "
-				}
-			}
-			str += "\n"
-		}
-	} else {
-		str += "Empty graph."
-	}
-	return str
+func (g *Graph) Contains(txID flow.Identifier) bool {
+	_, inMap := g.transactionNode[txID]
+	return inMap
 }
 
-func (g *Graph) AddNode(txID flow.Identifier) {
+//func (g *Graph) String() string {
+//	g.lock.RLock()
+//	str := ""
+//	if len(g.nodes) > 0 {
+//		for i := 0; i < len(g.nodes); i++ {
+//			str += g.nodes[i].String()
+//			edges := g.edges[*g.nodes[i]]
+//			if len(edges) > 0 {
+//				str += " -> "
+//				for j := 0; j < len(edges); j++ {
+//					str += edges[j].String() + " "
+//				}
+//			}
+//			str += "\n"
+//		}
+//	} else {
+//		str += "Empty graph."
+//	}
+//	return str
+//}
+
+func (g *Graph) addNode(txID flow.Identifier) {
 	g.lock.Lock()
 	node := &Node{transaction: txID}
 	g.transactionNode[txID] = node
 	g.nodes = append(g.nodes, node)
 	g.lock.Unlock()
 }
-func (g *Graph) AddDirectedEdge(tx1, tx2 flow.Identifier) {
+
+func (g *Graph) addDirectedEdge(tx1, tx2 flow.Identifier) {
 	g.lock.Lock()
-	if g.edges == nil {
-		g.edges = make(map[Node][]*Node)
-	}
 	n1 := g.transactionNode[tx1]
 	n2 := g.transactionNode[tx2]
 	g.edges[*n1] = append(g.edges[*n1], n2)
 	g.lock.Unlock()
-}
-
-func (g *Graph) Contains(txID flow.Identifier) bool {
-	_, inMap := g.transactionNode[txID]
-	return inMap
 }
 
 type Node struct {
@@ -201,7 +199,7 @@ func (n *Node) String() string {
 
 // Following code adapted from https://www.davidkaya.com/sets-in-golang/
 
-// TransactionSet stores transactions via their ID string representation
+// TransactionSet stores a set of transactions that are unique via their ID string representation.
 type TransactionSet struct {
 	m map[string]Transaction
 }
