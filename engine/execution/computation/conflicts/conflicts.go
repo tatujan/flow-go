@@ -7,12 +7,11 @@ import (
 )
 
 type Conflicts struct {
-	transactions            []Transaction
-	totalRegisterTouchSet   map[flow.RegisterID][]Transaction
-	dependencyGraph         Graph
-	conflictingTransactions map[flow.Identifier]Transaction
-	txChannel               chan Transaction
-	lock                    sync.RWMutex
+	transactions          []Transaction
+	totalRegisterTouchSet map[flow.RegisterID][]Transaction
+	dependencyGraph       map[flow.Identifier][]flow.Identifier
+	txChannel             chan Transaction
+	lock                  sync.RWMutex
 }
 
 type Transaction struct {
@@ -26,18 +25,33 @@ func (t *Transaction) String() string {
 	return t.TransactionID.String()
 }
 
-func (c *Conflicts) String() string {
-	return c.dependencyGraph.String()
-}
-
 func NewConflicts(txCount int) *Conflicts {
 	return &Conflicts{
-		transactions:            make([]Transaction, txCount),
-		totalRegisterTouchSet:   make(map[flow.RegisterID][]Transaction),
-		dependencyGraph:         newGraph(),
-		conflictingTransactions: make(map[flow.Identifier]Transaction),
-		txChannel:               make(chan Transaction, txCount),
+		transactions:          make([]Transaction, txCount),
+		totalRegisterTouchSet: make(map[flow.RegisterID][]Transaction),
+		dependencyGraph:       make(map[flow.Identifier][]flow.Identifier),
+		txChannel:             make(chan Transaction, txCount),
 	}
+}
+
+func (c *Conflicts) String() string {
+	c.lock.RLock()
+	str := ""
+	if len(c.dependencyGraph) > 0 {
+		for node, edges := range c.dependencyGraph {
+			str += node.String()
+			if len(edges) > 0 {
+				str += " -> "
+				for j := 0; j < len(edges); j++ {
+					str += edges[j].String() + " "
+				}
+			}
+			str += "\n"
+		}
+	} else {
+		str += "Empty dependency graph."
+	}
+	return str
 }
 
 // StoreTransaction is the public function that enables adding transactions to the conflict aggregator
@@ -50,15 +64,16 @@ func (c *Conflicts) TransactionCount() int {
 	return len(c.transactions)
 }
 
-// TransactionCount returns the number of transactions the conflict object is aware of
+// ConflictCount returns the number of transactions the conflict object is aware of
+// conflicts are defined as nodes that have a directed edge to another node.
 func (c *Conflicts) ConflictCount() int {
-	return len(c.conflictingTransactions)
-}
-
-// InTransactionConflicts returns true if the tx is in c.conflictingTransactions
-func (c *Conflicts) InTransactionConflicts(tx Transaction) bool {
-	_, inMap := c.conflictingTransactions[tx.TransactionID]
-	return inMap
+	count := 0
+	for _, edges := range c.dependencyGraph {
+		if len(edges) > 0 {
+			count++
+		}
+	}
+	return count
 }
 
 // Run receives transactions and adds them to the list of transactions. When finished receiving transactions, it builds
@@ -77,24 +92,26 @@ func (c *Conflicts) Close() {
 // buildDependencyGraph iterates over all added transactions one at a time, aggregates conflicts with previous
 // transactions,
 func (c *Conflicts) buildDependencyGraph() {
-	for _, tx := range c.transactions {
-		conflicts := c.getConflicts(tx)
+	// iterate over transactions in order
+	for i := 0; i < len(c.transactions); i++ {
+		tx := c.transactions[i]
+		conflicts := c.determineConflicts(tx)
 		if !conflicts.Empty() {
-			c.addToConflictGraph(tx, conflicts)
+			c.addToConflictGraph(tx.TransactionID, conflicts)
 		}
 	}
 }
 
-// getConflicts returns a list of previous transactions that conflict with transaction tx. This
-func (c *Conflicts) getConflicts(tx Transaction) TransactionSet {
+// determineConflicts returns a list of previous transactions that conflict with transaction tx. This
+func (c *Conflicts) determineConflicts(tx Transaction) TransactionSet {
 	var conflicts = NewTransactionSet()
 	for _, register := range tx.RegisterTouchSet {
 		registerTouches, registerExists := c.totalRegisterTouchSet[register]
 		if registerExists {
-			// if it has been touched previously, check if the transactionNode that previously touched it are from a
+			// if it has been touched previously, check if the transaction that previously touched it are from a
 			// different collection or are already in the list of conflicts
 			for _, transaction := range registerTouches {
-				if transaction.CollectionID != tx.CollectionID || c.InTransactionConflicts(transaction) {
+				if transaction.CollectionID != tx.CollectionID || c.isConflict(transaction.TransactionID) {
 					// if so, that transaction is a conflict. Add to list of conflicts with tx
 					conflicts.Add(transaction)
 				}
@@ -111,140 +128,113 @@ func (c *Conflicts) getConflicts(tx Transaction) TransactionSet {
 
 // addToConflictGraph takes a conflicts.Transaction type and a list of other Transactions it conflicts with and
 // adds those conflicts to the dependency graph
-func (c *Conflicts) addToConflictGraph(tx Transaction, conflicts TransactionSet) {
-	txID := tx.TransactionID
-	// store conflict transaction value using the txID as key
-	c.conflictingTransactions[txID] = tx
-	g := c.dependencyGraph
+func (c *Conflicts) addToConflictGraph(txID flow.Identifier, conflicts TransactionSet) {
 	// if the tx is not already in graph, add node
-	if !g.Contains(txID) {
-		g.addNode(txID)
+	if !c.containsNode(txID) {
+		c.addNode(txID)
 	}
 	// for each transaction that conflicts with tx, add a directed edge from that conflict to tx
-	for _, tx := range conflicts.IterableMap() {
-		conflictID := tx.TransactionID
+	for _, conflict := range conflicts.IterableMap() {
 		// if the conflict does not already exist in the graph, add it.
-		if !g.Contains(conflictID) {
-			g.addNode(conflictID)
+		cID := conflict.TransactionID
+		if !c.containsNode(cID) {
+			c.addNode(cID)
 		}
-		g.addDirectedEdge(conflictID, txID)
+		c.addDirectedEdge(cID, txID)
 	}
 }
 
-// Graph is a hashmap composed of identifiers as the nodes (keys) and a list of identifiers as edges (values)
-type Graph struct {
-	graph map[flow.Identifier][]flow.Identifier
-	lock  sync.RWMutex
+// a transaction is a conflict if it exists as a node in the dependency graph and has edges leading to other nodes.
+func (c *Conflicts) isConflict(txID flow.Identifier) bool {
+	edges, inMap := c.dependencyGraph[txID]
+	return inMap && len(edges) > 0
 }
 
-func newGraph() Graph {
-	return Graph{
-		graph: make(map[flow.Identifier][]flow.Identifier),
-	}
-}
+// ************************************************************
+// Graph Operations
+// ************************************************************
 
-func (g *Graph) Contains(txID flow.Identifier) bool {
-	_, inMap := g.graph[txID]
+func (c *Conflicts) containsNode(txID flow.Identifier) bool {
+	_, inMap := c.dependencyGraph[txID]
 	return inMap
 }
 
-func (g *Graph) String() string {
-	g.lock.RLock()
-	str := ""
-	if len(g.graph) > 0 {
-		for node, edges := range g.graph {
-			str += node.String()
-			if len(edges) > 0 {
-				str += " -> "
-				for j := 0; j < len(edges); j++ {
-					str += edges[j].String() + " "
-				}
-			}
-			str += "\n"
-		}
-	} else {
-		str += "Empty graph."
-	}
-	return str
-}
-
-func (g *Graph) addNode(txID flow.Identifier) error {
-	g.lock.Lock()
+func (c *Conflicts) addNode(txID flow.Identifier) error {
+	c.lock.Lock()
 	var err error
 	// check if node already exists
-	if !g.Contains(txID) {
+	if !c.containsNode(txID) {
 		// if not, add it
-		g.graph[txID] = make([]flow.Identifier, 0)
+		c.dependencyGraph[txID] = make([]flow.Identifier, 0)
 	} else {
 		err = errors.New("Node already exists.")
 	}
-	g.lock.Unlock()
+	c.lock.Unlock()
 	return err
-
 }
 
-func (g *Graph) deleteNode(txID flow.Identifier) error {
-	g.lock.Lock()
+func (c *Conflicts) deleteNode(txID flow.Identifier) error {
+	c.lock.Lock()
 	var err error
-	if g.Contains(txID) {
+	if c.containsNode(txID) {
 		//delete the node
-		delete(g.graph, txID)
+		delete(c.dependencyGraph, txID)
 		// delete node from all edge lists
-		for node, edges := range g.graph {
-			g.graph[node] = deleteEdgeIfExists(txID, edges)
+		for node, edges := range c.dependencyGraph {
+			c.dependencyGraph[node] = deleteEdgeIfExists(txID, edges)
 		}
 	} else {
 		err = errors.New("Node does not exist.")
 	}
-	g.lock.Unlock()
+	c.lock.Unlock()
 	return err
 
 }
 
 // addDirectedEdge adds an edge from tx1 to tx2 by appending tx2 to the list of edges associated with tx1
-func (g *Graph) addDirectedEdge(tx1, tx2 flow.Identifier) error {
-	g.lock.Lock()
+func (c *Conflicts) addDirectedEdge(tx1, tx2 flow.Identifier) error {
+	c.lock.Lock()
 	var err error
 	// check if nodes already exist. If not return error
-	if !g.Contains(tx1) || !g.Contains(tx2) {
+	if !c.containsNode(tx1) || !c.containsNode(tx2) {
 		err = errors.New("Cannot add edge to a node that does not exist.")
 	} else {
-		edges := g.graph[tx1]
+		edges := c.dependencyGraph[tx1]
 		// check if destination tx2 already exists in list of edges (index >= 0)
-		if indexOf(tx2, edges) < 0 {
+		if indexOfNodeInEdges(tx2, edges) < 0 {
 			// if not, add it
-			g.graph[tx1] = append(edges, tx2)
+			c.dependencyGraph[tx1] = append(edges, tx2)
 		} else {
 			err = errors.New("Edge already exists.")
 		}
 	}
-	g.lock.Unlock()
+	c.lock.Unlock()
 	return err
 }
 
-func (g *Graph) removeDirectedEdge(tx1, tx2 flow.Identifier) error {
-	g.lock.Lock()
+func (c *Conflicts) removeDirectedEdge(tx1, tx2 flow.Identifier) error {
+	c.lock.Lock()
 	var err error
 	// check if nodes already exist. If not return error
-	if !g.Contains(tx1) || !g.Contains(tx2) {
+	if !c.containsNode(tx1) || !c.containsNode(tx2) {
 		err = errors.New("Cannot remove edge from a node that does not exist.")
 	} else {
-		edges := g.graph[tx1]
+		edges := c.dependencyGraph[tx1]
 		// check if edge already exists, index >= 0
-		if index := indexOf(tx2, edges); index >= 0 {
+		if index := indexOfNodeInEdges(tx2, edges); index >= 0 {
 			// if exists, remove edge
-			g.graph[tx1] = unorderedDelete(index, edges)
+			c.dependencyGraph[tx1] = unorderedDelete(index, edges)
 		} else {
 			// otherwise, return error
 			err = errors.New("Edge does not exist.")
 		}
 	}
-	g.lock.Unlock()
+	c.lock.Unlock()
 	return err
 }
 
-// indexOf checks a list of tx for membership. If exists, index of tx is returned, else -1.
-func indexOf(tx flow.Identifier, edges []flow.Identifier) int {
+// indexOfNodeInEdges checks a list of tx for membership. If exists, index of tx is returned, else -1.
+func indexOfNodeInEdges(tx flow.Identifier, edges []flow.Identifier) int {
 	for index, edge := range edges {
 		if tx.String() == edge.String() {
 			return index
@@ -256,7 +246,7 @@ func indexOf(tx flow.Identifier, edges []flow.Identifier) int {
 // deleteEdgeIfExists takes a tx and a list of edges and removes that tx from the list of edges if it is in the list.
 // returns the list of edges, with tx removed if it was found.
 func deleteEdgeIfExists(destinationNode flow.Identifier, edges []flow.Identifier) []flow.Identifier {
-	if index := indexOf(destinationNode, edges); index >= 0 {
+	if index := indexOfNodeInEdges(destinationNode, edges); index >= 0 {
 		return unorderedDelete(index, edges)
 	} else {
 		return edges
@@ -271,32 +261,33 @@ func unorderedDelete(index int, edges []flow.Identifier) []flow.Identifier {
 	return edges[:last]
 }
 
+// ************************************************************
+// Transaction Set Type and Operations
+// ************************************************************
+
 // Following code adapted from https://www.davidkaya.com/sets-in-golang/
 
 // TransactionSet stores a set of transactions that are unique via their ID string representation.
 type TransactionSet struct {
-	m map[string]Transaction
+	m map[flow.Identifier]Transaction
 }
 
 func NewTransactionSet() TransactionSet {
 	s := TransactionSet{}
-	s.m = make(map[string]Transaction)
+	s.m = make(map[flow.Identifier]Transaction)
 	return s
 }
 
 func (s *TransactionSet) Add(tx Transaction) {
-	value := tx.TransactionID.String()
-	s.m[value] = tx
+	s.m[tx.TransactionID] = tx
 }
 
 func (s *TransactionSet) Remove(tx Transaction) {
-	id := tx.TransactionID.String()
-	delete(s.m, id)
+	delete(s.m, tx.TransactionID)
 }
 
 func (s *TransactionSet) Contains(tx Transaction) bool {
-	id := tx.TransactionID.String()
-	_, c := s.m[id]
+	_, c := s.m[tx.TransactionID]
 	return c
 }
 
@@ -304,6 +295,6 @@ func (s *TransactionSet) Empty() bool {
 	return len(s.m) == 0
 }
 
-func (s *TransactionSet) IterableMap() map[string]Transaction {
+func (s *TransactionSet) IterableMap() map[flow.Identifier]Transaction {
 	return s.m
 }

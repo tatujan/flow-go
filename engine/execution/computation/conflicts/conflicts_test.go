@@ -71,8 +71,8 @@ func TestTransactionConflictGraph(t *testing.T) {
 		}
 		c.Close()
 		<-cDone
-		require.True(t, c.InTransactionConflicts(conflictingTx1))
-		require.True(t, c.InTransactionConflicts(conflictingTx2))
+		require.True(t, c.containsNode(conflictingTx1.TransactionID))
+		require.True(t, c.containsNode(conflictingTx2.TransactionID))
 		require.Equal(t, 2, c.ConflictCount())
 
 	})
