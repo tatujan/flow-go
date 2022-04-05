@@ -1,7 +1,7 @@
 package conflicts
 
 import (
-	"fmt"
+	"errors"
 	"github.com/onflow/flow-go/model/flow"
 	"sync"
 )
@@ -131,70 +131,144 @@ func (c *Conflicts) addToConflictGraph(tx Transaction, conflicts TransactionSet)
 	}
 }
 
-// Graph adapted from https://flaviocopes.com/golang-data-structure-graph/
+// Graph is a hashmap composed of identifiers as the nodes (keys) and a list of identifiers as edges (values)
 type Graph struct {
-	transactionNode map[flow.Identifier]*Node
-	nodes           []*Node
-	edges           map[Node][]*Node
-	lock            sync.RWMutex
+	graph map[flow.Identifier][]flow.Identifier
+	lock  sync.RWMutex
 }
 
 func newGraph() Graph {
 	return Graph{
-		transactionNode: make(map[flow.Identifier]*Node),
-		nodes:           []*Node{},
-		edges:           make(map[Node][]*Node),
+		graph: make(map[flow.Identifier][]flow.Identifier),
 	}
 }
 
 func (g *Graph) Contains(txID flow.Identifier) bool {
-	_, inMap := g.transactionNode[txID]
+	_, inMap := g.graph[txID]
 	return inMap
 }
 
-//func (g *Graph) String() string {
-//	g.lock.RLock()
-//	str := ""
-//	if len(g.nodes) > 0 {
-//		for i := 0; i < len(g.nodes); i++ {
-//			str += g.nodes[i].String()
-//			edges := g.edges[*g.nodes[i]]
-//			if len(edges) > 0 {
-//				str += " -> "
-//				for j := 0; j < len(edges); j++ {
-//					str += edges[j].String() + " "
-//				}
-//			}
-//			str += "\n"
-//		}
-//	} else {
-//		str += "Empty graph."
-//	}
-//	return str
-//}
+func (g *Graph) String() string {
+	g.lock.RLock()
+	str := ""
+	if len(g.graph) > 0 {
+		for node, edges := range g.graph {
+			str += node.String()
+			if len(edges) > 0 {
+				str += " -> "
+				for j := 0; j < len(edges); j++ {
+					str += edges[j].String() + " "
+				}
+			}
+			str += "\n"
+		}
+	} else {
+		str += "Empty graph."
+	}
+	return str
+}
 
-func (g *Graph) addNode(txID flow.Identifier) {
+func (g *Graph) addNode(txID flow.Identifier) error {
 	g.lock.Lock()
-	node := &Node{transaction: txID}
-	g.transactionNode[txID] = node
-	g.nodes = append(g.nodes, node)
+	var err error
+	// check if node already exists
+	if !g.Contains(txID) {
+		// if not, add it
+		g.graph[txID] = make([]flow.Identifier, 0)
+	} else {
+		err = errors.New("Node already exists.")
+	}
 	g.lock.Unlock()
+	return err
+
 }
 
-func (g *Graph) addDirectedEdge(tx1, tx2 flow.Identifier) {
+func (g *Graph) deleteNode(txID flow.Identifier) error {
 	g.lock.Lock()
-	n1 := g.transactionNode[tx1]
-	n2 := g.transactionNode[tx2]
-	g.edges[*n1] = append(g.edges[*n1], n2)
+	var err error
+	if g.Contains(txID) {
+		//delete the node
+		delete(g.graph, txID)
+		// delete node from all edge lists
+		for node, edges := range g.graph {
+			g.graph[node] = deleteEdgeIfExists(txID, edges)
+		}
+	} else {
+		err = errors.New("Node does not exist.")
+	}
 	g.lock.Unlock()
+	return err
+
 }
 
-type Node struct {
-	transaction flow.Identifier
+// addDirectedEdge adds an edge from tx1 to tx2 by appending tx2 to the list of edges associated with tx1
+func (g *Graph) addDirectedEdge(tx1, tx2 flow.Identifier) error {
+	g.lock.Lock()
+	var err error
+	// check if nodes already exist. If not return error
+	if !g.Contains(tx1) || !g.Contains(tx2) {
+		err = errors.New("Cannot add edge to a node that does not exist.")
+	} else {
+		edges := g.graph[tx1]
+		// check if destination tx2 already exists in list of edges (index >= 0)
+		if indexOf(tx2, edges) < 0 {
+			// if not, add it
+			g.graph[tx1] = append(edges, tx2)
+		} else {
+			err = errors.New("Edge already exists.")
+		}
+	}
+	g.lock.Unlock()
+	return err
 }
 
-func (n *Node) String() string {
-	return fmt.Sprintf("%v", n.transaction)
+func (g *Graph) removeDirectedEdge(tx1, tx2 flow.Identifier) error {
+	g.lock.Lock()
+	var err error
+	// check if nodes already exist. If not return error
+	if !g.Contains(tx1) || !g.Contains(tx2) {
+		err = errors.New("Cannot remove edge from a node that does not exist.")
+	} else {
+		edges := g.graph[tx1]
+		// check if edge already exists, index >= 0
+		if index := indexOf(tx2, edges); index >= 0 {
+			// if exists, remove edge
+			g.graph[tx1] = unorderedDelete(index, edges)
+		} else {
+			// otherwise, return error
+			err = errors.New("Edge does not exist.")
+		}
+	}
+	g.lock.Unlock()
+	return err
+}
+
+// indexOf checks a list of tx for membership. If exists, index of tx is returned, else -1.
+func indexOf(tx flow.Identifier, edges []flow.Identifier) int {
+	for index, edge := range edges {
+		if tx.String() == edge.String() {
+			return index
+		}
+	}
+	return -1
+}
+
+// deleteEdgeIfExists takes a tx and a list of edges and removes that tx from the list of edges if it is in the list.
+// returns the list of edges, with tx removed if it was found.
+func deleteEdgeIfExists(destinationNode flow.Identifier, edges []flow.Identifier) []flow.Identifier {
+	if index := indexOf(destinationNode, edges); index >= 0 {
+		return unorderedDelete(index, edges)
+	} else {
+		return edges
+	}
+}
+
+// unorderedDelete is a constant time delete for an element of a slice identified by index. Slice is reordered.
+// return a new slice with index element removed.
+func unorderedDelete(index int, edges []flow.Identifier) []flow.Identifier {
+	last := len(edges) - 1
+	edges[index] = edges[last]
+	return edges[:last]
 }
 
 // Following code adapted from https://www.davidkaya.com/sets-in-golang/
