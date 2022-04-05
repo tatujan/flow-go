@@ -117,6 +117,7 @@ func (e *blockComputer) executeBlock(
 	stateView state.View,
 	programs *programs.Programs,
 ) (*execution.ComputationResult, error) {
+	
 	// check the start state is set
 	if !block.HasStartState() {
 		return nil, fmt.Errorf("executable block start state is not set")
