@@ -159,24 +159,24 @@ func (vmt vmTest) run(
 							}`, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain))),
 				)
 		}
-		getSignerReceiver := func(chain flow.Chain) *flow.TransactionBody {
-			return flow.NewTransactionBody().SetScript([]byte(fmt.Sprintf(`
-					import FungibleToken from 0x%s
-					import FlowToken from 0x%s
-					
-					transaction(recipient: Address) {
-						prepare(signer: AuthAccount) {
-							let vaultRef = signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVaultUnittest0)
-								?? panic("failed to borrow reference to sender vault")
-						}
-						post {
-							getAccount(recipient)
-								.getCapability<&FlowToken.Vault{FungibleToken.Receiver}>(/public/flowTokenReceiverUnittest0)
-								.check():
-								"Vault recv ref was not created correctly."
-						}
-					}`, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain))))
-		}
+		//getSignerReceiver := func(chain flow.Chain) *flow.TransactionBody {
+		//	return flow.NewTransactionBody().SetScript([]byte(fmt.Sprintf(`
+		//			import FungibleToken from 0x%s
+		//			import FlowToken from 0x%s
+		//
+		//			transaction(recipient: Address) {
+		//				prepare(signer: AuthAccount) {
+		//					let vaultRef = signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVaultUnittest0)
+		//						?? panic("failed to borrow reference to sender vault")
+		//				}
+		//				post {
+		//					getAccount(recipient)
+		//						.getCapability<&FlowToken.Vault{FungibleToken.Receiver}>(/public/flowTokenReceiverUnittest0)
+		//						.check():
+		//						"Vault recv ref was not created correctly."
+		//				}
+		//			}`, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain))))
+		//}
 
 		customAddr := new(CustomAddressGenerator)
 
@@ -195,19 +195,19 @@ func (vmt vmTest) run(
 		SignTransactionAsServiceAccounts(createAccountTxs, 0, chain)
 		require.NoError(t, err)
 
-		// ==== Get Signer Receiver =====
-		getSignerRcvTx := getSignerReceiver(chain).
-			AddAuthorizer(chain.ServiceAddress()).
-			AddArgument(jsoncdc.MustEncode(cadence.NewAddress(addresses[0])))
-
-		getSignerRcvTx.SetProposalKey(chain.ServiceAddress(), 0, uint64(len(createAccountTxs)))
-		getSignerRcvTx.SetPayer(chain.ServiceAddress())
-
-		err = testutil.SignEnvelope(
-			getSignerRcvTx,
-			chain.ServiceAddress(),
-			unittest.ServiceAccountPrivateKey)
-		require.NoError(t, err)
+		//// ==== Get Signer Receiver =====
+		//getSignerRcvTx := getSignerReceiver(chain).
+		//	AddAuthorizer(chain.ServiceAddress()).
+		//	AddArgument(jsoncdc.MustEncode(cadence.NewAddress(addresses[0])))
+		//
+		//getSignerRcvTx.SetProposalKey(chain.ServiceAddress(), 0, uint64(len(createAccountTxs)))
+		//getSignerRcvTx.SetPayer(chain.ServiceAddress())
+		//
+		//err = testutil.SignEnvelope(
+		//	getSignerRcvTx,
+		//	chain.ServiceAddress(),
+		//	unittest.ServiceAccountPrivateKey)
+		//require.NoError(t, err)
 
 		// ==== Transfer tokens to new account ====
 		transferTx := fundAccountTx(chain).
@@ -254,7 +254,7 @@ func (vmt vmTest) run(
 			{&createAccountTxs[1]},
 			{&createAccountTxs[2]},
 			{&createAccountTxs[3]},
-			{getSignerRcvTx},
+			{transferTx},
 		}, chain, opts, bootstrpOpts)
 
 		fmt.Sprint(cr.ComputationUsed)
@@ -770,22 +770,22 @@ func CreateAccountCreationTransactions(t *testing.T, chain flow.Chain, numberOfP
 			prepare(signer: AuthAccount) {
 				//let acct = AuthAccount(payer: signer)
 				//acct.addPublicKey("%s".decodeHex())
-				if signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVaultUnittest%d) == nil {
+				if signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVault%d) == nil {
 					// Create a new flowToken Vault and put it in storage
-					signer.save(<-FlowToken.createEmptyVault(), to: /storage/flowTokenVaultUnittest%d)
+					signer.save(<-FlowToken.createEmptyVault(), to: /storage/flowTokenVault%d)
 		
 					// Create a public capability to the Vault that only exposes
 					// the deposit function through the Receiver interface
 					signer.link<&FlowToken.Vault{FungibleToken.Receiver}>(
-						/public/flowTokenReceiverUnittest%d,
-						target: /storage/flowTokenVaultUnittest%d
+						/public/flowTokenReceiver%d,
+						target: /storage/flowTokenVault%d
 					)
 		
 					// Create a public capability to the Vault that only exposes
 					// the balance field through the Balance interface
 					signer.link<&FlowToken.Vault{FungibleToken.Balance}>(
-						/public/flowTokenBalanceUnittest%d,
-						target: /storage/flowTokenVaultUnittest%d
+						/public/flowTokenBalance%d,
+						target: /storage/flowTokenVault%d
 					)
 				}
 			}
