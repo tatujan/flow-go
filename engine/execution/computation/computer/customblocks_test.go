@@ -159,6 +159,24 @@ func (vmt vmTest) run(
 							}`, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain))),
 				)
 		}
+		getSignerReceiver := func(chain flow.Chain) *flow.TransactionBody {
+			return flow.NewTransactionBody().SetScript([]byte(fmt.Sprintf(`
+					import FungibleToken from 0x%s
+					import FlowToken from 0x%s
+					
+					transaction(recipient: Address) {
+						prepare(signer: AuthAccount) {
+							let vaultRef = signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVaultUnittest0)
+								?? panic("failed to borrow reference to sender vault")
+						}
+						post {
+							getAccount(recipient)
+								.getCapability<&FlowToken.Vault{FungibleToken.Receiver}>(/public/flowTokenReceiverUnittest0)
+								.check():
+								"Vault recv ref was not created correctly."
+						}
+					}`, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain))))
+		}
 
 		customAddr := new(CustomAddressGenerator)
 
@@ -175,6 +193,20 @@ func (vmt vmTest) run(
 		require.NoError(t, err)
 
 		SignTransactionAsServiceAccounts(createAccountTxs, 0, chain)
+		require.NoError(t, err)
+
+		// ==== Get Signer Receiver =====
+		getSignerRcvTx := getSignerReceiver(chain).
+			AddAuthorizer(chain.ServiceAddress()).
+			AddArgument(jsoncdc.MustEncode(cadence.NewAddress(addresses[0])))
+
+		getSignerRcvTx.SetProposalKey(chain.ServiceAddress(), 0, uint64(len(createAccountTxs)))
+		getSignerRcvTx.SetPayer(chain.ServiceAddress())
+
+		err = testutil.SignEnvelope(
+			getSignerRcvTx,
+			chain.ServiceAddress(),
+			unittest.ServiceAccountPrivateKey)
 		require.NoError(t, err)
 
 		// ==== Transfer tokens to new account ====
@@ -211,15 +243,18 @@ func (vmt vmTest) run(
 
 		bootstrpOpts := []fvm.BootstrapProcedureOption{
 			fvm.WithInitialTokenSupply(unittest.GenesisTokenSupply),
-			fvm.WithTransactionFee(fvm.DefaultTransactionFees)}
+			fvm.WithAccountCreationFee(fvm.DefaultAccountCreationFee),
+			fvm.WithMinimumStorageReservation(fvm.DefaultMinimumStorageReservation),
+			fvm.WithTransactionFee(fvm.DefaultTransactionFees),
+			fvm.WithStorageMBPerFLOW(fvm.DefaultStorageMBPerFLOW),
+		}
 
 		cr := executeBlockAndNotVerify(t, [][]*flow.TransactionBody{
 			{&createAccountTxs[0]},
 			{&createAccountTxs[1]},
 			{&createAccountTxs[2]},
 			{&createAccountTxs[3]},
-			{transferTx},
-			{transferTx2},
+			{getSignerRcvTx},
 		}, chain, opts, bootstrpOpts)
 
 		fmt.Sprint(cr.ComputationUsed)
@@ -733,29 +768,29 @@ func CreateAccountCreationTransactions(t *testing.T, chain flow.Chain, numberOfP
 		transaction {
 		
 			prepare(signer: AuthAccount) {
-				let acct = AuthAccount(payer: signer)
-				acct.addPublicKey("%s".decodeHex())
-				if signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVault) == nil {
+				//let acct = AuthAccount(payer: signer)
+				//acct.addPublicKey("%s".decodeHex())
+				if signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVaultUnittest%d) == nil {
 					// Create a new flowToken Vault and put it in storage
-					signer.save(<-FlowToken.createEmptyVault(), to: /storage/flowTokenVault)
+					signer.save(<-FlowToken.createEmptyVault(), to: /storage/flowTokenVaultUnittest%d)
 		
 					// Create a public capability to the Vault that only exposes
 					// the deposit function through the Receiver interface
 					signer.link<&FlowToken.Vault{FungibleToken.Receiver}>(
-						/public/flowTokenReceiver,
-						target: /storage/flowTokenVault
+						/public/flowTokenReceiverUnittest%d,
+						target: /storage/flowTokenVaultUnittest%d
 					)
 		
 					// Create a public capability to the Vault that only exposes
 					// the balance field through the Balance interface
 					signer.link<&FlowToken.Vault{FungibleToken.Balance}>(
-						/public/flowTokenBalance,
-						target: /storage/flowTokenVault
+						/public/flowTokenBalanceUnittest%d,
+						target: /storage/flowTokenVaultUnittest%d
 					)
 				}
 			}
 		}
-	`, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain), hex.EncodeToString(keyBytes))
+	`, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain), hex.EncodeToString(keyBytes), i, i, i, i, i, i)
 
 		// create the transaction to create the account
 		tx := flow.NewTransactionBody().
