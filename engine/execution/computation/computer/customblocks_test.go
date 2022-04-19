@@ -3,7 +3,6 @@ package computer_test
 import (
 	"context"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"github.com/onflow/cadence"
 	jsoncdc "github.com/onflow/cadence/encoding/json"
@@ -20,7 +19,6 @@ import (
 	completeLedger "github.com/onflow/flow-go/ledger/complete"
 	"github.com/onflow/flow-go/ledger/complete/wal/fixtures"
 	"github.com/onflow/flow-go/model/flow"
-	"github.com/onflow/flow-go/module/epochs"
 	"github.com/onflow/flow-go/module/metrics"
 	"github.com/onflow/flow-go/module/trace"
 	"github.com/onflow/flow-go/utils/unittest"
@@ -77,8 +75,8 @@ func (vmt vmTest) run(
 ) func(t *testing.T) {
 	return func(t *testing.T) {
 		// preliminaries
-		numTxPerCol := 2
-		numCol := 2
+		//numTxPerCol := 2
+		//numCol := 2
 		numAccount := 4
 		seeds := []uint64{1, 2, 3, 4}
 		/*
@@ -109,20 +107,22 @@ func (vmt vmTest) run(
 		// custom address generator used to deterministically generate account addresses from a seed (instead of purely randomly)
 		cag := new(CustomAddressGenerator)
 
-		// Account creation requires private keys.
-		// Generate private keys and the appropriate flow transactions for creation.
-		privateKeys, createAccountTxs := createAccountCreationTransactions(t, chain, numAccount, seeds)
-
+		// TODO: I think the issue is in the account creation and setup.
 		// this should return the address of newly created accounts using the CustomAddressGenerator and seeds
 		accountAddresses, err := cag.AddressAtIndexes(seeds)
 		require.NoError(t, err)
 
+		// Account creation requires private keys.
+		// Generate private keys and the appropriate flow transactions for creation.
+		privateKeys, createAccountTxs := createAccountCreationTransactions(t, chain, numAccount, seeds)
+
 		// account creation transactions need to be signed by the chain service account
+		// TODO: should these funding transactions be signed by the account owner?
 		signTransactionsAsServiceAccount(createAccountTxs, 0, chain)
 		require.NoError(t, err)
 
 		// initialize a new Fund Account flow transaction, fund with 10 tokens
-		// transsaction arguments : (amount: UFix64, recipient: Address)
+		// transaction arguments : (amount: UFix64, recipient: Address)
 		initialAmount := 10
 		recipient := accountAddresses[0]
 		fundAccountTx := flow.NewTransactionBody().
@@ -163,7 +163,8 @@ func (vmt vmTest) run(
 		)
 		require.NoError(t, err)
 
-		epochConfig := epochs.DefaultEpochConfig()
+		// TODO: FlowEpoch contract missing is one of the errors
+		//epochConfig := epochs.DefaultEpochConfig()
 		//epochConfig.NumCollectorClusters = 0
 		bootstrpOpts := []fvm.BootstrapProcedureOption{
 			fvm.WithInitialTokenSupply(unittest.GenesisTokenSupply),
@@ -171,7 +172,7 @@ func (vmt vmTest) run(
 			fvm.WithMinimumStorageReservation(fvm.DefaultMinimumStorageReservation),
 			fvm.WithTransactionFee(fvm.DefaultTransactionFees),
 			fvm.WithStorageMBPerFLOW(fvm.DefaultStorageMBPerFLOW),
-			fvm.WithEpochConfig(epochConfig),
+			//fvm.WithEpochConfig(epochConfig),
 		}
 
 		collectionResult := executeBlockAndNotVerify(t, [][]*flow.TransactionBody{
@@ -183,112 +184,6 @@ func (vmt vmTest) run(
 		}, chain, opts, bootstrpOpts)
 
 		fmt.Sprint(collectionResult.ComputationUsed)
-		/*
-			//logFilename := "customBlockTest.log"
-			//csvFilename := "customBlockLogOutput.csv"
-			//file, err := os.OpenFile(logFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-			//logger := zerolog.New(file)
-			//// NewTracer takes a logger, service name (string), a chainID (string), and a trace sensitivity (int))
-			//tracer, err := trace.NewTracer(logger, "CustomBlockTrace", "test", trace.SensitivityCaptureAll)
-			//// NewExecutionCollector generates a metrics object, taking a tracer and a Registerer object as input.
-			//metrics := metrics.NewExecutionCollector(tracer, prometheus.DefaultRegisterer)
-			//
-			//bootstrapper := bootstrapexec.NewBootstrapper(logger)
-			//
-			//privateKeys, err := generateAccountPrivateKeys(numCol*numTxPerCol, seeds)
-			//require.NoError(t, err)
-			//
-			//ledger, err := completeLedger.NewLedger(wal, 100, metrics, logger, completeLedger.DefaultPathFinderVersion)
-			//require.NoError(t, err)
-			//ledgerCommiter := committer.NewLedgerViewCommitter(ledger, tracer)
-			//
-			//bootstrpOpts := []fvm.BootstrapProcedureOption{
-			//	fvm.WithInitialTokenSupply(unittest.GenesisTokenSupply),
-			//	fvm.WithTransactionFee(fvm.DefaultTransactionFees)}
-			//
-			//initialCommit, err := bootstrapper.BootstrapLedger(
-			//	ledger,
-			//	unittest.ServiceAccountPublicKey,
-			//	chain,
-			//	bootstrpOpts...
-			//)
-			//
-			//// todo: Unmock ledger once we have valid transactions
-			//// code snippet to unmock ledger
-			////wal := &fixtures.NoopWAL{}
-			////ledger, err := complete.NewLedger(wal, 100, &metrics.NoopCollector{}, zerolog.Logger{}, complete.DefaultPathFinderVersion)
-			////curS := ledger.InitialState()
-			////q := utils.QueryFixture()
-			////q.SetState(curS)
-			////require.NoError(t, err)
-			////retProof, err := ledger.Prove(q)
-			////require.NoError(t, err)
-			////trieProof, err := encoding.DecodeTrieBatchProof(retProof)
-			////assert.True(t, proof.VerifyTrieBatchProof(trieProof, curS))
-			//
-			////// unmocking the ledger requires to provide proofs of state commitment.
-			////// However dummy transactions w/o signatures do not yield valid proofs.
-			////ledger := new(ledgermock.Ledger)
-			////var expectedStateCommitment led.State
-			////copy(expectedStateCommitment[:], []byte{1, 2, 3})
-			////ledger.On("Set", mock.Anything).
-			////	Return(expectedStateCommitment, nil, nil).
-			////	Times(numTxPerCol*numCol + 1)
-			////expectedProof := led.Proof([]byte{2, 3, 4})
-			////ledger.On("Prove", mock.Anything).
-			////	Return(expectedProof, nil).
-			////	Times(numTxPerCol*numCol + 1)
-			//
-			////blockcommitter := committer.NewLedgerViewCommitter(ledger, tracer)
-			//
-			//exe, err := computer.NewBlockComputer(vm, execCtx, metrics, tracer, logger, committer.NewNoopViewCommitter())
-			//require.NoError(t, err)
-			//
-			//// Generate your own block with 2 collections and 4 txs in total
-			////block := generateBlock(numCol, numTxPerCol, rag)
-			////cag := new(CustomAddressGenerator)
-			////cag.init(uint64(numCol*numTxPerCol), seeds)
-			//block := generateCustomBlock(numCol, numTxPerCol, accounts, privateKeys, chain)
-			//
-			//// returns nill register value
-			//view := delta.NewView(func(owner, controller, key string) (flow.RegisterValue, error) {
-			//	return nil, nil
-			//})
-			//
-			//result, err := exe.ExecuteBlock(context.Background(), block, view, programs.NewEmptyPrograms())
-			//assert.NoError(t, err)
-			//assert.Len(t, result.StateSnapshots, numCol+1)
-			//assert.Len(t, result.TrieUpdates, numCol+1)
-			//
-			//assertEventHashesMatch(t, numCol+1, result)
-			////vm.AssertExpectations(t)
-			//
-			//// open file containing logs in JSON format
-			//sourceFile, err := os.Open(logFilename)
-			//if err != nil {
-			//	// do nothing?
-			//}
-			//// create csv file
-			//outputFile, err := os.Create(csvFilename)
-			//if err != nil {
-			//	// do nothing?
-			//}
-			//// convert the JSON logs to CSV file
-			//lineswritten, err := convertJSONToCSV(sourceFile, outputFile)
-			//if err != nil {
-			//	// do nothing
-			//}
-			//if lineswritten == 0 {
-			//	panic("Unexpected logs, most likely block execution contained errors. See " + logFilename)
-			//}
-			//
-			//outputFile.Close()
-			//sourceFile.Close()
-			//// remove original json log file
-			//os.Remove(logFilename)
-			//expectedLines := numCol*numTxPerCol + numCol + 2 // +1 for system tx, +1 for block execution log
-			//assert.Equal(t, lineswritten, expectedLines)
-		*/
 		f(t, chain)
 
 	}
@@ -297,15 +192,12 @@ func (vmt vmTest) run(
 func createAccountCreationTransactions(t *testing.T, chain flow.Chain, numberOfPrivateKeys int, seedArr []uint64) ([]flow.AccountPrivateKey, []flow.TransactionBody) {
 	accountKeys, err := generateAccountPrivateKeys(numberOfPrivateKeys, seedArr)
 	require.NoError(t, err)
+
 	var txs []flow.TransactionBody
-
 	for i := 0; i < len(accountKeys); i++ {
-		keyBytes, err := flow.EncodeRuntimeAccountPublicKey(accountKeys[i].PublicKey(1000))
-		require.NoError(t, err)
-
 		// create the transaction to create the account
 		tx := flow.NewTransactionBody().
-			SetScript(getVaultCreationTransactionScript(chain, i, keyBytes)).
+			SetScript(getSetupAccountTransactionScript(chain)).
 			AddAuthorizer(chain.ServiceAddress())
 
 		txs = append(txs, *tx)
@@ -517,148 +409,21 @@ func uint64ToPrivKeyBytes(v uint64) []byte {
 	return b[:]
 }
 
-func getAccountCreationTransactionScript() []byte {
-	txScript := []byte(`
-		transaction(publicKey: [UInt8]) {
-			prepare(signer: AuthAccount) {
-				let acct = AuthAccount(payer: signer)
-				acct.addPublicKey(publicKey)
-			}
-		}`,
-	)
-	return txScript
-}
-
+// ---------------------------------
+// Script template functions
+// ----------------------------------
 func getTransferTokenTransactionScript(chain flow.Chain) []byte {
 	// transfer token script
-	txScript := []byte(fmt.Sprintf(`
-							// This transaction is a template for a transaction that
-							// could be used by anyone to send tokens to another account
-							// that has been set up to receive tokens.
-							//
-							// The withdraw amount and the account from getAccount
-							// would be the parameters to the transaction
-		
-							import FungibleToken from 0x%s
-							import FlowToken from 0x%s
-		
-							transaction(amount: UFix64, to: Address) {
-		
-								// The Vault resource that holds the tokens that are being transferred
-								let sentVault: @FungibleToken.Vault
-		
-								prepare(signer: AuthAccount) {
-		
-									// Get a reference to the signer's stored vault
-									let vaultRef = signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVault)
-										?? panic("Could not borrow reference to the owner's Vault!")
-		
-									// Withdraw tokens from the signer's stored vault
-									self.sentVault <- vaultRef.withdraw(amount: amount)
-									//signer.link<&FlowToken.Vault{FungibleToken.Receiver, FungibleToken.Balance}>(/public/flowTokenReceiver, target: /storage/flowTokenVault)
-								}
-								execute {
-									// Get the recipient's public account object
-									let recipient = getAccount(to)
-								
-									// Create a new empty vault obj.
-									//let vaultRec <- FungibleToken.createEmptyVault()
-
-									// Store the vault in the account storage
-									//recipient.save<@FlowToken.Vault>(<-vaultRec, to: /storage/flowTokenVault)
-
-									//let receiverRef = recipient.link<&FlowToken.Vault{FungibleToken.Receiver, FungibleToken.Balance}>(/public/flowTokenReceiver, target: /storage/flowTokenVault)
-
-									// Get a reference to the recipient's Receiver
-									let receiverRef = recipient.getCapability(/public/flowTokenReceiver)
-										.borrow<&{FungibleToken.Receiver}>()
-										?? panic("Could not borrow receiver reference to the recipient's Vault")
-								
-									// Deposit the withdrawn tokens in the recipient's receiver
-									receiverRef.deposit(from: <-self.sentVault)
-								}
-							}`, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain)))
-	return txScript
+	return []byte(fmt.Sprintf(transferTokenTemplate, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain)))
 }
 
 func getFundAccountTransactionScript(chain flow.Chain) []byte {
-	txScript := []byte(fmt.Sprintf(`
-						import FungibleToken from 0x%s
-						import FlowToken from 0x%s
-						
-						transaction(amount: UFix64, recipient: Address) {
-							let sentVault: @FungibleToken.Vault
-							prepare(signer: AuthAccount) {
-							let vaultRef = signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVault)
-								?? panic("failed to borrow reference to sender vault")
-							self.sentVault <- vaultRef.withdraw(amount: amount)
-							}
-							execute {
-							let receiverRef =  getAccount(recipient)
-								.getCapability(/public/flowTokenReceiver)
-								.borrow<&{FungibleToken.Receiver}>()
-								?? panic("failed to borrow reference to recipient vault")
-							receiverRef.deposit(from: <-self.sentVault)
-							}
-						}`, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain)))
+	txScript := []byte(fmt.Sprintf(fundAccountTemplate, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain)))
 	return txScript
 }
 
-/*
-import FungibleToken from 0x%s
-import FlowToken from 0x%s
-
-transaction(amount: UFix64, recipient: Address) {
-let sentVault: @FungibleToken.Vault
-prepare(signer: AuthAccount) {
-let vaultRef = signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVault)
-?? panic("failed to borrow reference to sender vault")
-self.sentVault <- vaultRef.withdraw(amount: amount)
-}
-execute {
-let receiverRef =  getAccount(recipient)
-.getCapability(/public/flowTokenReceiver)
-.borrow<&{FungibleToken.Receiver}>()
-?? panic("failed to borrow reference to recipient vault")
-receiverRef.deposit(from: <-self.sentVault)
-}*/
-
-func getVaultCreationTransactionScript(chain flow.Chain, i int, keyBytes []byte) []byte {
-	txScript := []byte(fmt.Sprintf(`
-		// This transaction is a template for a transaction
-		// to add a Vault resource to their account
-		// so that they can use the flowToken
-		
-		import FungibleToken from 0x%s
-		import FlowToken from 0x%s
-		
-		transaction {
-		
-			prepare(signer: AuthAccount) {
-				//let acct = AuthAccount(payer: signer)
-				//acct.addPublicKey("%s".decodeHex())
-				if signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVault%d) == nil {
-					// Create a new flowToken Vault and put it in storage
-					signer.save(<-FlowToken.createEmptyVault(), to: /storage/flowTokenVault%d)
-		
-					// Create a public capability to the Vault that only exposes
-					// the deposit function through the Receiver interface
-					signer.link<&FlowToken.Vault{FungibleToken.Receiver}>(
-						/public/flowTokenReceiver%d,
-						target: /storage/flowTokenVault%d
-					)
-		
-					// Create a public capability to the Vault that only exposes
-					// the balance field through the Balance interface
-					signer.link<&FlowToken.Vault{FungibleToken.Balance}>(
-						/public/flowTokenBalance%d,
-						target: /storage/flowTokenVault%d
-					)
-				}
-			}
-		}
-	`, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain), hex.EncodeToString(keyBytes), i, i, i, i, i, i))
-	return txScript
+func getSetupAccountTransactionScript(chain flow.Chain) []byte {
+	return []byte(fmt.Sprintf(setupAccountTemplate, fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain)))
 }
 
 const setupAccountTemplate = `
@@ -692,235 +457,96 @@ transaction {
             )
         }
     }
-}
-`
-const deployEpochTransactionTemplate = `
-import FlowClusterQC from 0x%s
 
-transaction(clusterWeights: [{String: UInt64}]) {
-  prepare(serviceAccount: AuthAccount)	{
-
-    // first, construct Cluster objects from cluster weights
-    let clusters: [FlowClusterQC.Cluster] = []
-    var clusterIndex: UInt16 = 0
-    for weightMapping in clusterWeights {
-      let cluster = FlowClusterQC.Cluster(clusterIndex, weightMapping)
-      clusterIndex = clusterIndex + 1
-    }
-
-	serviceAccount.contracts.add(
-		name: "FlowEpoch",
-		code: "%s".decodeHex(),
-		currentEpochCounter: UInt64(%d),
-		numViewsInEpoch: UInt64(%d),
-		numViewsInStakingAuction: UInt64(%d),
-		numViewsInDKGPhase: UInt64(%d),
-		numCollectorClusters: UInt16(%d),
-		FLOWsupplyIncreasePercentage: UFix64(%d),
-		randomSource: %s,
-		collectorClusters: clusters,
-        // NOTE: clusterQCs and dkgPubKeys are empty because these initial values are not used
-		clusterQCs: [],
-		dkgPubKeys: [],
-	)
-  }
 }
 `
 
-/* from line ~120
-//// ==== Get Signer Receiver =====
-//getSignerRcvTx := getSignerReceiver(chain).
-//	AddAuthorizer(chain.ServiceAddress()).
-//	AddArgument(jsoncdc.MustEncode(cadence.NewAddress(addresses[0])))
-//
-//getSignerRcvTx.SetProposalKey(chain.ServiceAddress(), 0, uint64(len(createAccountTxs)))
-//getSignerRcvTx.SetPayer(chain.ServiceAddress())
-//
-//err = testutil.SignEnvelope(
-//	getSignerRcvTx,
-//	chain.ServiceAddress(),
-//	unittest.ServiceAccountPrivateKey)
-//require.NoError(t, err)
-*/
+// TODO: put post conditions in to check that capability was created properly, for testing?
+//post {
+//	// Check that the capabilities were created correctly
+//	// by getting the public capability and checking
+//	// that it points to a valid Vault object
+//	// that implements the Receiver interface
+//	getAccount(0x%s).getCapability<&FlowToken.Vault{FungibleToken.Receiver}>(/public/flowTokenReceiver)
+//					.check():
+//					"Vault Receiver Reference was not created correctly"
+//}
 
-/*func generateCustomCollection(numOfTxs int, accounts []flow.Address, privKeys []flow.AccountPrivateKey, chain flow.Chain, visitor func(body *flow.TransactionBody)) *entity.CompleteCollection {
-	transactions := make([]*flow.TransactionBody, numOfTxs)
-	for i := 0; i < numOfTxs; i++ {
-		// todo generate valid transactions.
-		accountKey := privKeys[i].PublicKey(fvm.AccountKeyWeightThreshold)
-		encAccountKey, _ := flow.EncodeRuntimeAccountPublicKey(accountKey)
-		cadAccountKey := testutil.BytesToCadenceArray(encAccountKey)
-		encCadAccountKey, _ := jsoncdc.Encode(cadAccountKey)
-
-		txBody := flow.NewTransactionBody().
-			SetScript(getAccountCreationTransactionScript()).
-			AddArgument(encCadAccountKey).
-			AddAuthorizer(chain.ServiceAddress()).
-			SetProposalKey(chain.ServiceAddress(), 0, uint64(i)).
-			SetPayer(chain.ServiceAddress())
-
-		err := testutil.SignPayload(txBody, accounts[i], privKeys[i])
-		if err != nil {
-			panic(fmt.Errorf("cannot sign payload: %w", err))
-		}
-		err = testutil.SignEnvelope(txBody, chain.ServiceAddress(), unittest.ServiceAccountPrivateKey)
-		if err != nil {
-			panic(fmt.Errorf("cannot sign envelope: %w", err))
-		}
-		if visitor != nil {
-			visitor(txBody)
-		}
-		transactions[i] = txBody
-		//fmt.Printf("tx data: %s for address: %+v\n", string(txBody.Script), txBody.Payer)
-
+// TODO: I think the accounts need to be created and public keys registered?
+const accountCreationTemplate = `
+transaction(publicKey: [UInt8]) {
+	prepare(signer: AuthAccount) {
+		let acct = AuthAccount(payer: signer)
+		acct.addPublicKey(publicKey)
 	}
-
-	collection := flow.Collection{Transactions: transactions}
-
-	guarantee := &flow.CollectionGuarantee{
-		CollectionID: collection.ID(),
-		Signature:    nil,
-	}
-
-	return &entity.CompleteCollection{
-		Guarantee:    guarantee,
-		Transactions: transactions,
-	}
-}*/
-
-/*func stringSliceContainsSubstring(substring string, slice []string) bool {
-	for _, elem := range slice {
-		if strings.Contains(elem, substring) {
-			return true
-		}
-	}
-	return false
-}*/
-
-/*func generateCustomBlock(numberOfCol, numOfTxs int, accounts []flow.Address, privKeys []flow.AccountPrivateKey, chain flow.Chain) *entity.ExecutableBlock {
-	collections := make([]*entity.CompleteCollection, numberOfCol)
-	guarantees := make([]*flow.CollectionGuarantee, numberOfCol)
-	completeCollections := make(map[flow.Identifier]*entity.CompleteCollection)
-
-	for i := 0; i < numberOfCol; i++ {
-		// func generateCustomCollection(numOfTxs int, accounts []flow.Address, privKeys []flow.AccountPrivateKey, chain flow.Chain, visitor func(body *flow.TransactionBody)) *entity.CompleteCollection {
-		collection := generateCustomCollection(numOfTxs, accounts[i*numOfTxs:(i*numOfTxs)+numOfTxs], privKeys, chain, nil)
-		collections[i] = collection
-		guarantees[i] = collection.Guarantee
-		completeCollections[collection.Guarantee.ID()] = collection
-	}
-
-	block := flow.Block{
-		Header: &flow.Header{
-			View: 42,
-		},
-		Payload: &flow.Payload{
-			Guarantees: guarantees,
-		},
-	}
-
-	return &entity.ExecutableBlock{
-		Block:               &block,
-		CompleteCollections: completeCollections,
-		StartState:          unittest.StateCommitmentPointerFixture(),
-	}
-}*/
-
-/*
-func convertJSONToCSV(sourceFile *os.File, outputFile *os.File) (int, error) {
-	linesWritten := 0
-	// struct with all possible fields for log messages
-	type LogOutput struct {
-		Level                string `json:"level"`
-		CollectionID         string `json:"collection_id"`
-		NumberOfTransactions int64  `json:"numberOfTransactions"`
-		BlockID              string `json:"block_id"`
-		TxID                 string `json:"tx_id"`
-		TraceID              string `json:"traceID"`
-		TxIndex              int64  `json:"tx_index"`
-		Height               int64  `json:"height"`
-		SystemChunk          bool   `json:"system_chunk"`
-		ParallelExecution    bool   `json:"parallel_execution"`
-		ComputationUsed      int64  `json:"computation_used"`
-		TimeSpentInNS        int64  `json:"timeSpentInNS"`
-		Time                 int64  `json:"time"`
-		Message              string `json:"message"`
-	}
-
-	// split file into lines (each line is a JSON object)
-	scanner := bufio.NewScanner(sourceFile)
-	scanner.Split(bufio.ScanLines)
-
-	// unmarshall each line into a LogOutput struct
-	var logOutputs []LogOutput
-	for scanner.Scan() {
-		// default values of log output
-		logOutput := LogOutput{
-			Level:                "none",
-			CollectionID:         "none",
-			NumberOfTransactions: -1,
-			BlockID:              "none",
-			TxID:                 "none",
-			TraceID:              "none",
-			TxIndex:              -1,
-			Height:               -1,
-			SystemChunk:          false,
-			ParallelExecution:    false,
-			ComputationUsed:      -1,
-			TimeSpentInNS:        -1,
-			Time:                 -1,
-			Message:              "none",
-		}
-		bytes := scanner.Bytes()
-		err := json.Unmarshal(bytes, &logOutput)
-		if err != nil {
-			return linesWritten, err
-		}
-		logOutputs = append(logOutputs, logOutput)
-	}
-
-	writer := csv.NewWriter(outputFile)
-	defer writer.Flush()
-
-	// use reflection to produce csv header and get struct field values
-	r := reflect.ValueOf(LogOutput{})
-	typeOfTO := r.Type()
-	numFields := r.NumField()
-	numRecords := len(logOutputs)
-
-	// generate the csv headers from struct fields
-	var header []string
-	csvData := make([][]string, numRecords)
-	for col := range csvData {
-		csvData[col] = make([]string, numFields)
-	}
-
-	// iterate over each field, aggregate log data per field
-	for i := 0; i < numFields; i++ {
-		// generate the csv header from field names as we iterate
-		header = append(header, typeOfTO.Field(i).Name)
-		for j := 0; j < numRecords; j++ {
-			value := reflect.ValueOf(logOutputs[j]).Field(i).Interface()
-			strValue := fmt.Sprintf("%v", value)
-			csvData[j][i] = strValue
-		}
-	}
-	// write header to csv file
-	if err := writer.Write(header); err != nil {
-		return linesWritten, err
-	}
-	// write all log data to csv
-	for row := range csvData {
-		data := csvData[row]
-		// filter out all entries that do not have timing data
-		if !stringSliceContainsSubstring("executing", data) {
-			// write row to file
-			if err := writer.Write(data); err != nil {
-				return linesWritten, err
-			}
-			linesWritten++
-		}
-	}
-	return linesWritten, nil
 }
-*/
+`
+
+const transferTokenTemplate = `
+// This transaction is a template for a transaction that
+// could be used by anyone to send tokens to another account
+// that has been set up to receive tokens.
+//
+// The withdraw amount and the account from getAccount
+// would be the parameters to the transaction
+
+import FungibleToken from 0x%s
+import FlowToken from 0x%s
+
+transaction(amount: UFix64, to: Address) {
+
+	// The Vault resource that holds the tokens that are being transferred
+	let sentVault: @FungibleToken.Vault
+
+	prepare(signer: AuthAccount) {
+
+		// Get a reference to the signer's stored vault
+		let vaultRef = signer.borrow<&FungibleToken.Provider>(from: /storage/flowTokenVault)
+			?? panic("Could not borrow reference to the owner's Vault!")
+
+		// Withdraw tokens from the signer's stored vault
+		self.sentVault <- vaultRef.withdraw(amount: amount)
+	}
+
+	execute {
+
+		// Get the recipient's public account object
+		let recipient = getAccount(to)
+
+		// Get a reference to the recipient's Receiver
+		let receiverRef = recipient.getCapability(/public/flowTokenReceiver)
+			.borrow<&{FungibleToken.Receiver}>()
+			?? panic("Could not borrow receiver reference to the recipient's Vault")
+
+		// Deposit the withdrawn tokens in the recipient's receiver
+		receiverRef.deposit(from: <-self.sentVault)
+	}
+}`
+
+/* TODO: this is the error we are trying to solve
+error: panic: failed to borrow reference to recipient vault
+--> a53a42cdbab6a80bebbea0b643d80e75a9f74f2011fe4f2f40924fd2929d3bee:16:5
+|
+16 | 		?? panic("failed to borrow reference to recipient vault")
+|      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^*/
+
+const fundAccountTemplate = `
+import FungibleToken from 0x%s
+import FlowToken from 0x%s
+
+transaction(amount: UFix64, recipient: Address) {
+	let sentVault: @FungibleToken.Vault
+	prepare(signer: AuthAccount) {
+	let vaultRef = signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVault)
+		?? panic("failed to borrow reference to sender vault")
+	self.sentVault <- vaultRef.withdraw(amount: amount)
+	}
+	execute {
+	let receiverRef =  getAccount(recipient)
+		.getCapability(/public/flowTokenReceiver)
+		.borrow<&{FungibleToken.Receiver}>()
+		?? panic("failed to borrow reference to recipient vault")
+	receiverRef.deposit(from: <-self.sentVault)
+	}
+}
+`
