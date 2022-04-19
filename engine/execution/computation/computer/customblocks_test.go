@@ -28,6 +28,7 @@ import (
 	"github.com/onflow/flow-go/module/trace"
 	"github.com/onflow/flow-go/utils/unittest"
 	"github.com/stretchr/testify/require"
+	"log"
 	"math/rand"
 	"os"
 	"reflect"
@@ -703,7 +704,8 @@ func executeBlockAndNotVerify(t *testing.T,
 	rt := fvm.NewInterpreterRuntime()
 	vm := fvm.NewVirtualMachine(rt)
 
-	logger := zerolog.Nop()
+	logger := zerolog.New(log.Writer())
+	zerolog.SetGlobalLevel(zerolog.ErrorLevel)
 
 	opts = append(opts, fvm.WithChain(chain))
 
