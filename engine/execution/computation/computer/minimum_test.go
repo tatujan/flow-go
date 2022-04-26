@@ -69,30 +69,10 @@ func TestCustomBlockExecution(t *testing.T) {
 	})
 }
 
-func getTransferTokenTransactionScript(t *testing.T, chain flow.Chain) []byte {
-	transferTokenTemplateBytes, err := ioutil.ReadFile("cadence/tx_transferToken.cdc")
-	require.NoError(t, err)
-	// transfer token script
-	return []byte(fmt.Sprintf(string(transferTokenTemplateBytes), fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain)))
-}
-
-func getFundAccountTransactionScript(t *testing.T, chain flow.Chain) []byte {
-	fundAccountTemplateBytes, err := ioutil.ReadFile("cadence/tx_fundAccount.cdc")
-	require.NoError(t, err)
-	txScript := []byte(fmt.Sprintf(string(fundAccountTemplateBytes), fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain)))
-	return txScript
-}
-
 func getSetupAccountTransactionScript(t *testing.T, chain flow.Chain) []byte {
-	setupAccountTemplateBytes, err := ioutil.ReadFile("cadence/tx_setupAccount.cdc")
+	setupAccountTemplateBytes, err := ioutil.ReadFile("tx_setupAccount.cdc")
 	require.NoError(t, err)
 	return []byte(fmt.Sprintf(string(setupAccountTemplateBytes), fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain)))
-}
-
-func getCreateAccountTransactionScript(t *testing.T) []byte {
-	createAccountTemplateBytes, err := ioutil.ReadFile("cadence/tx_createAccount.cdc")
-	require.NoError(t, err)
-	return []byte(fmt.Sprintf(string(createAccountTemplateBytes)))
 }
 
 func setupEnvironment(t *testing.T, chain flow.Chain, ctx fvm.Context, vm *fvm.VirtualMachine, logger zerolog.Logger) (flow.StateCommitment, computer.BlockComputer, *delta.View) {
