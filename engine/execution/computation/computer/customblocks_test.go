@@ -176,7 +176,7 @@ func (vmt vmTest) run(
 		}
 
 		collectionResult := executeBlockAndNotVerify(t, [][]*flow.TransactionBody{
-			{&createAccountTxs[0]},
+			{&createAccountTxs[0]}, // account funding tx
 			{&createAccountTxs[1]},
 			{&createAccountTxs[2]},
 			{&createAccountTxs[3]},
@@ -457,20 +457,19 @@ transaction {
             )
         }
     }
-
+	post {
+		// Check that the capabilities were created correctly
+		// by getting the public capability and checking
+		// that it points to a valid Vault object
+		// that implements the Receiver interface
+		self.getCapability<&FlowToken.Vault{FungibleToken.Receiver}>(/public/flowTokenReceiver)
+						.check():
+						"Vault Receiver Reference was not created correctly"
+	}
 }
 `
 
 // TODO: put post conditions in to check that capability was created properly, for testing?
-//post {
-//	// Check that the capabilities were created correctly
-//	// by getting the public capability and checking
-//	// that it points to a valid Vault object
-//	// that implements the Receiver interface
-//	getAccount(0x%s).getCapability<&FlowToken.Vault{FungibleToken.Receiver}>(/public/flowTokenReceiver)
-//					.check():
-//					"Vault Receiver Reference was not created correctly"
-//}
 
 // TODO: I think the accounts need to be created and public keys registered?
 const accountCreationTemplate = `
@@ -536,17 +535,18 @@ import FlowToken from 0x%s
 
 transaction(amount: UFix64, recipient: Address) {
 	let sentVault: @FungibleToken.Vault
+
 	prepare(signer: AuthAccount) {
-	let vaultRef = signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVault)
-		?? panic("failed to borrow reference to sender vault")
-	self.sentVault <- vaultRef.withdraw(amount: amount)
+		let vaultRef = signer.borrow<&FlowToken.Vault>(from: /storage/flowTokenVault)
+			?? panic("failed to borrow reference to sender vault")
+		self.sentVault <- vaultRef.withdraw(amount: amount)
 	}
 	execute {
-	let receiverRef =  getAccount(recipient)
+		let receiverRef =  getAccount(recipient)
 		.getCapability(/public/flowTokenReceiver)
 		.borrow<&{FungibleToken.Receiver}>()
-		?? panic("failed to borrow reference to recipient vault")
-	receiverRef.deposit(from: <-self.sentVault)
+			?? panic("failed to borrow reference to recipient vault")
+		receiverRef.deposit(from: <-self.sentVault)
 	}
 }
 `
