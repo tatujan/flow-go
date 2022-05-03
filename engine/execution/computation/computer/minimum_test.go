@@ -30,6 +30,7 @@ import (
 
 func TestCustomBlockExecution(t *testing.T) {
 	chain := flow.Mainnet.Chain()
+	//ag := chain.NewAddressGenerator()
 	logger := zerolog.New(log.Writer())
 	zerolog.SetGlobalLevel(zerolog.ErrorLevel)
 	ctx := fvm.NewContext(logger, fvm.WithChain(chain), fvm.WithCadenceLogging(true))
@@ -39,40 +40,54 @@ func TestCustomBlockExecution(t *testing.T) {
 	t.Run("setup vaults", func(t *testing.T) {
 		initialCommit, blockComputer, view := setupEnvironment(t, chain, ctx, vm, logger)
 		sequenceNumber := uint64(0)
-		createAccount0Tx := flow.NewTransactionBody().
-			// use basic account creation script
-			SetScript(getSetupAccountTransactionScript(t, chain)).
-			AddArgument(jsoncdc.MustEncode(cadence.NewAddress(chain.ServiceAddress()))).
-			AddAuthorizer(chain.ServiceAddress()).
-			SetProposalKey(chain.ServiceAddress(), 0, sequenceNumber).
-			SetPayer(chain.ServiceAddress())
-		// sign tx as service account
-		err := testutil.SignEnvelope(
-			createAccount0Tx,
-			chain.ServiceAddress(),
-			unittest.ServiceAccountPrivateKey,
+
+		//Create private keys
+		pk0, err := testutil.GenerateAccountPrivateKey()
+		require.NoError(t, err)
+		pk1, err := testutil.GenerateAccountPrivateKey()
+		require.NoError(t, err)
+		privateKeys := []flow.AccountPrivateKey{pk0, pk1}
+
+		// create accounts on the chain associated with those private keys
+		accounts, err := testutil.CreateAccounts(vm, view, programs.NewEmptyPrograms(), privateKeys, chain)
+		require.NoError(t, err)
+		account0address := accounts[0]
+		account1address := accounts[1]
+
+		// setup the account 0 to send and receive flow tokens
+		setupAccount0Tx := setupAccountTransactionBody(t, chain).
+			AddArgument(jsoncdc.MustEncode(cadence.NewAddress(account0address))).
+			AddAuthorizer(account0address).
+			SetProposalKey(account0address, 0, sequenceNumber).
+			SetPayer(account0address)
+		// sign tx as account 0
+		err = testutil.SignEnvelope(
+			setupAccount0Tx,
+			account0address,
+			pk0,
+		)
+		require.NoError(t, err)
+		//sequenceNumber++
+
+		// setup account 1 to send and receive flow tokens
+		setupAccount1Tx := setupAccountTransactionBody(t, chain).
+			AddArgument(jsoncdc.MustEncode(cadence.NewAddress(account1address))).
+			AddAuthorizer(account1address).
+			SetProposalKey(account1address, 0, sequenceNumber).
+			SetPayer(account1address)
+		// sign tx as account 1
+		err = testutil.SignEnvelope(
+			setupAccount1Tx,
+			account1address,
+			pk1,
 		)
 		require.NoError(t, err)
 		sequenceNumber++
 
-		fundAccountTx := flow.NewTransactionBody().
-			SetScript(getFundAccountTransactionScript(chain)).
-			AddAuthorizer(chain.ServiceAddress()).
-			AddArgument(jsoncdc.MustEncode(cadence.UFix64(initialAmount))).
-			AddArgument(jsoncdc.MustEncode(cadence.NewAddress(recipient))).
-			// set the proposal key and sequence number for this transaction:
-			SetProposalKey(chain.ServiceAddress(), 0, uint64(len(createAccountTxs))).
-			// service account is the payer
-			SetPayer(chain.ServiceAddress())
-		// sign the tx envelope
-		err = testutil.SignEnvelope(
-			fundAccountTx,
-			chain.ServiceAddress(),
-			unittest.ServiceAccountPrivateKey,
-		)
-		require.NoError(t, err)
-
-		transactions := []*flow.TransactionBody{createAccount0Tx}
+		transactions := []*flow.TransactionBody{
+			setupAccount0Tx,
+			setupAccount1Tx,
+		}
 		collectionOfTransactions := [][]*flow.TransactionBody{transactions}
 		executableBlock := unittest.ExecutableBlockFromTransactions(collectionOfTransactions)
 		executableBlock.StartState = &initialCommit
@@ -94,10 +109,22 @@ func TestCustomBlockExecution(t *testing.T) {
 	})
 }
 
-func getSetupAccountTransactionScript(t *testing.T, chain flow.Chain) []byte {
-	setupAccountTemplateBytes, err := ioutil.ReadFile("tx_setupAccount.cdc")
+func setupAccountTransactionBody(t *testing.T, chain flow.Chain) *flow.TransactionBody {
+	setupAccountTemplateBytes, err := ioutil.ReadFile("cadence/tx_setupAccount.cdc")
 	require.NoError(t, err)
-	return []byte(fmt.Sprintf(string(setupAccountTemplateBytes), fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain)))
+	script := []byte(fmt.Sprintf(string(setupAccountTemplateBytes), fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain)))
+	txBody := flow.NewTransactionBody()
+	txBody.SetScript(script)
+	return txBody
+}
+
+func fundAccountTransactionBody(t *testing.T, chain flow.Chain) *flow.TransactionBody {
+	setupAccountTemplateBytes, err := ioutil.ReadFile("cadence/tx_fundAccount.cdc")
+	require.NoError(t, err)
+	script := []byte(fmt.Sprintf(string(setupAccountTemplateBytes), fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain)))
+	txBody := flow.NewTransactionBody()
+	txBody.SetScript(script)
+	return txBody
 }
 
 func setupEnvironment(t *testing.T, chain flow.Chain, ctx fvm.Context, vm *fvm.VirtualMachine, logger zerolog.Logger) (flow.StateCommitment, computer.BlockComputer, *delta.View) {
@@ -111,7 +138,8 @@ func setupEnvironment(t *testing.T, chain flow.Chain, ctx fvm.Context, vm *fvm.V
 	epochConfig.NumCollectorClusters = 0
 	bootstrapOpts := []fvm.BootstrapProcedureOption{
 		fvm.WithInitialTokenSupply(unittest.GenesisTokenSupply),
-		fvm.WithEpochConfig(epochConfig),
+		// it seems like service transactions might be expected to fail? removing epoch config
+		//fvm.WithEpochConfig(epochConfig),
 	}
 	initialCommit, err := bootstrapper.BootstrapLedger(
 		ledger,
