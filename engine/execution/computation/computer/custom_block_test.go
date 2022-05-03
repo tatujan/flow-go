@@ -37,7 +37,7 @@ func TestCustomBlockExecution(t *testing.T) {
 	// Set logging level
 	zerolog.SetGlobalLevel(zerolog.ErrorLevel)
 
-	t.Run("simple setup, fund, transfer", func(t *testing.T) {
+	t.Run("simple setup, fund, transfer works", func(t *testing.T) {
 		// preliminaries, set up environment
 		chain := flow.Mainnet.Chain()
 		rt := fvm.NewInterpreterRuntime()
@@ -120,6 +120,8 @@ func TestCustomBlockExecution(t *testing.T) {
 		for _, e := range txErrors {
 			assert.Empty(t, e)
 		}
+
+		// TODO: long term todo here is to assert that the dependency graph matches our expectations based on the txs
 	})
 }
 
