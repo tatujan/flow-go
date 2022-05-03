@@ -28,162 +28,64 @@ import (
 	"testing"
 )
 
+const setupAccountTxTemplateFilename = "cadence/tx_setupAccount.cdc"
+const fundAccountTxTemplateFilename = "cadence/tx_fundAccount.cdc"
+const transferTokensTxTemplateFilename = "cadence/tx_transferToken.cdc"
+
 func TestCustomBlockExecution(t *testing.T) {
-	chain := flow.Mainnet.Chain()
-	//ag := chain.NewAddressGenerator()
-	logger := zerolog.New(log.Writer())
+
+	// Set logging level
 	zerolog.SetGlobalLevel(zerolog.ErrorLevel)
-	ctx := fvm.NewContext(logger, fvm.WithChain(chain), fvm.WithCadenceLogging(true))
-	rt := fvm.NewInterpreterRuntime()
-	vm := fvm.NewVirtualMachine(rt)
 
-	t.Run("setup vaults", func(t *testing.T) {
-		initialCommit, blockComputer, view := setupEnvironment(t, chain, ctx, vm, logger)
-		sequenceNumber := uint64(0)
+	t.Run("simple setup, fund, transfer", func(t *testing.T) {
+		// preliminaries, set up environment
+		chain := flow.Mainnet.Chain()
+		rt := fvm.NewInterpreterRuntime()
+		vm := fvm.NewVirtualMachine(rt)
+		initialCommit, blockComputer, view := setupEnvironment(t, chain, vm)
+
+		const numberOfAccounts = 2
 
 		//Create private keys
-		privateKeys, err := testutil.GenerateAccountPrivateKeys(2)
+		privateKeys, err := testutil.GenerateAccountPrivateKeys(numberOfAccounts)
 		require.NoError(t, err)
 
 		// create accounts on the chain associated with those private keys
 		accounts, err := testutil.CreateAccounts(vm, view, programs.NewEmptyPrograms(), privateKeys, chain)
 		require.NoError(t, err)
 
-		/*
-		****************************************************************************************************************
-		************  Define Transactions ******************************************************************************
-		****************************************************************************************************************
-		 */
+		// initialize account sequence numbers
+		sequenceNumbers := make([]uint64, numberOfAccounts)
+		serviceSequenceNumber := uint64(0)
+
+		// Define Transactions
+		// *************************************************************************************************************
 
 		// make transaction to setup the account 0 to send and receive flow tokens
-		setupAccount0Tx := makeAndSignSetupAccountTransaction(t, chain, accounts[0], sequenceNumber, privateKeys[0])
+		setupAccount0Tx := makeAndSignSetupAccountTransaction(t, chain, accounts[0], sequenceNumbers[0], privateKeys[0])
+		sequenceNumbers[0]++
 		// make transaction to setup account 1 to send and receive flow tokens
-		setupAccount1Tx := makeAndSignSetupAccountTransaction(t, chain, accounts[1], sequenceNumber, privateKeys[1])
-
-		transactions := []*flow.TransactionBody{
-			setupAccount0Tx,
-			setupAccount1Tx,
-		}
-
-		//**************************************************************************************************************
-
-		collectionOfTransactions := [][]*flow.TransactionBody{transactions}
-		executableBlock := unittest.ExecutableBlockFromTransactions(collectionOfTransactions)
-		executableBlock.StartState = &initialCommit
-
-		computationResult, err := blockComputer.ExecuteBlock(
-			context.Background(), executableBlock, view, programs.NewEmptyPrograms(),
-		)
-		assert.NoError(t, err)
-		var txErrors []string
-		for i, txRes := range computationResult.TransactionResults {
-			// skip service transaction errors
-			if i != len(computationResult.TransactionResults)-1 {
-				txErrors = append(txErrors, txRes.ErrorMessage)
-			}
-		}
-		// it seems that the service transaction might be expected to fail
-		// https://github.com/onflow/flow-go/pull/2007/files#diff-6c545270710f8d91b58673b79d869691949eda628d6d4612b6162074237ec9dd
-		for _, e := range txErrors {
-			assert.Empty(t, e)
-		}
-	})
-
-	t.Run("setup vaults and fund account", func(t *testing.T) {
-		initialCommit, blockComputer, view := setupEnvironment(t, chain, ctx, vm, logger)
-		sequenceNumber := uint64(0)
-
-		//Create private keys
-		privateKeys, err := testutil.GenerateAccountPrivateKeys(2)
-		require.NoError(t, err)
-
-		// create accounts on the chain associated with those private keys
-		accounts, err := testutil.CreateAccounts(vm, view, programs.NewEmptyPrograms(), privateKeys, chain)
-		require.NoError(t, err)
-
-		/*
-		****************************************************************************************************************
-		************  Define Transaction********************************************************************************
-		****************************************************************************************************************
-		 */
-
-		// make transaction to setup the account 0 to send and receive flow tokens
-		setupAccount0Tx := makeAndSignSetupAccountTransaction(t, chain, accounts[0], sequenceNumber, privateKeys[0])
-		// make transaction to setup account 1 to send and receive flow tokens
-		setupAccount1Tx := makeAndSignSetupAccountTransaction(t, chain, accounts[1], sequenceNumber, privateKeys[1])
-
-		// make transaction to fund account 0
-		//arguments: amount, recipient
-		amount := 10
-		recipient := accounts[0]
-		fundAccount0Tx := makeAndSignFundAccountTransaction(t, chain, amount, recipient, sequenceNumber)
-
-		transactions := []*flow.TransactionBody{
-			setupAccount0Tx,
-			setupAccount1Tx,
-			fundAccount0Tx,
-		}
-		//**************************************************************************************************************
-
-		collectionOfTransactions := [][]*flow.TransactionBody{transactions}
-		executableBlock := unittest.ExecutableBlockFromTransactions(collectionOfTransactions)
-		executableBlock.StartState = &initialCommit
-
-		computationResult, err := blockComputer.ExecuteBlock(
-			context.Background(), executableBlock, view, programs.NewEmptyPrograms(),
-		)
-		assert.NoError(t, err)
-		var txErrors []string
-		for i, txRes := range computationResult.TransactionResults {
-			// skip service transaction errors
-			if i != len(computationResult.TransactionResults)-1 {
-				txErrors = append(txErrors, txRes.ErrorMessage)
-			}
-		}
-		// it seems that the service transaction might be expected to fail
-		// https://github.com/onflow/flow-go/pull/2007/files#diff-6c545270710f8d91b58673b79d869691949eda628d6d4612b6162074237ec9dd
-		for _, e := range txErrors {
-			assert.Empty(t, e)
-		}
-	})
-
-	t.Run("setup vaults, fund account, transfer tokens", func(t *testing.T) {
-		initialCommit, blockComputer, view := setupEnvironment(t, chain, ctx, vm, logger)
-		sequenceNumber := uint64(0)
-
-		//Create private keys
-		privateKeys, err := testutil.GenerateAccountPrivateKeys(2)
-		require.NoError(t, err)
-
-		// create accounts on the chain associated with those private keys
-		accounts, err := testutil.CreateAccounts(vm, view, programs.NewEmptyPrograms(), privateKeys, chain)
-		require.NoError(t, err)
-
-		/*
-		****************************************************************************************************************
-		************  Define Transaction********************************************************************************
-		****************************************************************************************************************
-		 */
-		// make transaction to setup the account 0 to send and receive flow tokens
-		setupAccount0Tx := makeAndSignSetupAccountTransaction(t, chain, accounts[0], sequenceNumber, privateKeys[0])
-		// make transaction to setup account 1 to send and receive flow tokens
-		setupAccount1Tx := makeAndSignSetupAccountTransaction(t, chain, accounts[1], sequenceNumber, privateKeys[1])
-
+		setupAccount1Tx := makeAndSignSetupAccountTransaction(t, chain, accounts[1], sequenceNumbers[1], privateKeys[1])
+		sequenceNumbers[1]++
 		// make transaction to fund account 0
 		amount := 10
 		recipient := accounts[0]
-		fundAccount0Tx := makeAndSignFundAccountTransaction(t, chain, amount, recipient, sequenceNumber)
-
-		sequenceNumber++
+		fundAccount0Tx := makeAndSignFundAccountTransaction(t, chain, amount, recipient, serviceSequenceNumber)
 
 		// make transaction to transfer funds from account 0 to account 1
-		toAccountAddress := accounts[1]
-		fromAccountAddress := accounts[0]
-		fromAccountPK := privateKeys[0]
+		// identify account by integer
+		to := 1
+		from := 0
+		toAccountAddress := accounts[to]
+		fromAccountAddress := accounts[from]
+		fromAccountPK := privateKeys[from]
 		transferAmount := 5
 		transferFundsTx := makeAndSignTransferTokenTransaction(
-			t, chain, fromAccountAddress, transferAmount, toAccountAddress, sequenceNumber, fromAccountPK,
+			t, chain, fromAccountAddress, transferAmount, toAccountAddress, sequenceNumbers[from], fromAccountPK,
 		)
+		sequenceNumbers[from]++
+
+		//TODO: add post condition for checking balances
 
 		transactions := []*flow.TransactionBody{
 			setupAccount0Tx,
@@ -201,6 +103,11 @@ func TestCustomBlockExecution(t *testing.T) {
 			context.Background(), executableBlock, view, programs.NewEmptyPrograms(),
 		)
 		assert.NoError(t, err)
+
+		//TODO: print out addresses (cadence addresses?) or registers that are being written to/read from inside of block computer
+		// check that they are what we expect (do we see overlap when we expect them?)
+		// affirm what basis we are building conflicts on
+
 		var txErrors []string
 		for i, txRes := range computationResult.TransactionResults {
 			// skip service transaction errors
@@ -218,7 +125,8 @@ func TestCustomBlockExecution(t *testing.T) {
 
 // Fund account transaction
 func makeAndSignFundAccountTransaction(t *testing.T, chain flow.Chain, amount int, recipient flow.Address, sequenceNumber uint64) *flow.TransactionBody {
-	fundAccountTx := fundAccountTransactionBody(t, chain).
+	fundAccountTx := flow.NewTransactionBody().
+		SetScript(prepareFungibleTokenFlowTokenTemplate(t, chain, fundAccountTxTemplateFilename)).
 		AddAuthorizer(chain.ServiceAddress()).
 		AddArgument(jsoncdc.MustEncode(cadence.UFix64(amount))).
 		AddArgument(jsoncdc.MustEncode(cadence.NewAddress(recipient))).
@@ -236,18 +144,10 @@ func makeAndSignFundAccountTransaction(t *testing.T, chain flow.Chain, amount in
 	return fundAccountTx
 }
 
-func fundAccountTransactionBody(t *testing.T, chain flow.Chain) *flow.TransactionBody {
-	setupAccountTemplateBytes, err := ioutil.ReadFile("cadence/tx_fundAccount.cdc")
-	require.NoError(t, err)
-	script := []byte(fmt.Sprintf(string(setupAccountTemplateBytes), fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain)))
-	txBody := flow.NewTransactionBody()
-	txBody.SetScript(script)
-	return txBody
-}
-
 // Setup Account transaction
 func makeAndSignSetupAccountTransaction(t *testing.T, chain flow.Chain, accountAddress flow.Address, sequenceNumber uint64, pk flow.AccountPrivateKey) *flow.TransactionBody {
-	setupAccountTx := setupAccountTransactionBody(t, chain).
+	setupAccountTx := flow.NewTransactionBody().
+		SetScript(prepareFungibleTokenFlowTokenTemplate(t, chain, setupAccountTxTemplateFilename)).
 		AddArgument(jsoncdc.MustEncode(cadence.NewAddress(accountAddress))).
 		AddAuthorizer(accountAddress).
 		SetProposalKey(accountAddress, 0, sequenceNumber).
@@ -262,18 +162,10 @@ func makeAndSignSetupAccountTransaction(t *testing.T, chain flow.Chain, accountA
 	return setupAccountTx
 }
 
-func setupAccountTransactionBody(t *testing.T, chain flow.Chain) *flow.TransactionBody {
-	setupAccountTemplateBytes, err := ioutil.ReadFile("cadence/tx_setupAccount.cdc")
-	require.NoError(t, err)
-	script := []byte(fmt.Sprintf(string(setupAccountTemplateBytes), fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain)))
-	txBody := flow.NewTransactionBody()
-	txBody.SetScript(script)
-	return txBody
-}
-
 // Transfer Token transaction
 func makeAndSignTransferTokenTransaction(t *testing.T, chain flow.Chain, from flow.Address, amount int, to flow.Address, sequenceNumber uint64, fromPrivateKey flow.AccountPrivateKey) *flow.TransactionBody {
-	transferFundsTx := transferTokensTransactionBody(t, chain).
+	transferFundsTx := flow.NewTransactionBody().
+		SetScript(prepareFungibleTokenFlowTokenTemplate(t, chain, transferTokensTxTemplateFilename)).
 		AddAuthorizer(from).
 		AddArgument(jsoncdc.MustEncode(cadence.UFix64(amount))).
 		AddArgument(jsoncdc.MustEncode(cadence.NewAddress(to))).
@@ -291,21 +183,24 @@ func makeAndSignTransferTokenTransaction(t *testing.T, chain flow.Chain, from fl
 	return transferFundsTx
 }
 
-func transferTokensTransactionBody(t *testing.T, chain flow.Chain) *flow.TransactionBody {
-	setupAccountTemplateBytes, err := ioutil.ReadFile("cadence/tx_transferToken.cdc")
+func prepareFungibleTokenFlowTokenTemplate(t *testing.T, chain flow.Chain, filename string) []byte {
+	templateBytes, err := ioutil.ReadFile(filename)
 	require.NoError(t, err)
-	script := []byte(fmt.Sprintf(string(setupAccountTemplateBytes), fvm.FungibleTokenAddress(chain), fvm.FlowTokenAddress(chain)))
-	txBody := flow.NewTransactionBody()
-	txBody.SetScript(script)
-	return txBody
+	script := []byte(fmt.Sprintf(
+		// expected: two string formatting inputs, Fungible Token address and Flow Token address
+		string(templateBytes),
+		fvm.FungibleTokenAddress(chain),
+		fvm.FlowTokenAddress(chain)),
+	)
+	return script
 }
 
-func setupEnvironment(t *testing.T, chain flow.Chain, ctx fvm.Context, vm *fvm.VirtualMachine, logger zerolog.Logger) (flow.StateCommitment, computer.BlockComputer, *delta.View) {
+func setupEnvironment(t *testing.T, chain flow.Chain, vm *fvm.VirtualMachine) (flow.StateCommitment, computer.BlockComputer, *delta.View) {
+	logger := zerolog.New(log.Writer())
 	collector := metrics.NewNoopCollector()
-	tracer := trace.NewNoopTracer()
 	ledger, err := completeLedger.NewLedger(&fixtures.NoopWAL{}, 100, collector, logger, completeLedger.DefaultPathFinderVersion)
 	require.NoError(t, err)
-	ledgerCommitter := committer.NewLedgerViewCommitter(ledger, trace.NewNoopTracer())
+
 	bootstrapper := bootstrapexec.NewBootstrapper(logger)
 	epochConfig := epochs.DefaultEpochConfig()
 	epochConfig.NumCollectorClusters = 0
@@ -321,8 +216,12 @@ func setupEnvironment(t *testing.T, chain flow.Chain, ctx fvm.Context, vm *fvm.V
 		bootstrapOpts...,
 	)
 
+	ctx := fvm.NewContext(logger, fvm.WithChain(chain), fvm.WithCadenceLogging(true))
+	tracer := trace.NewNoopTracer()
+	ledgerCommitter := committer.NewLedgerViewCommitter(ledger, trace.NewNoopTracer())
 	blockComputer, err := computer.NewBlockComputer(vm, ctx, collector, tracer, logger, ledgerCommitter)
 	require.NoError(t, err)
 	view := delta.NewView(executionState.LedgerGetRegister(ledger, initialCommit))
+
 	return initialCommit, blockComputer, view
 }
