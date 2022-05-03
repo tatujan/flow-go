@@ -82,11 +82,31 @@ func TestCustomBlockExecution(t *testing.T) {
 			pk1,
 		)
 		require.NoError(t, err)
-		sequenceNumber++
+		//sequenceNumber++
+
+		// fund account 0
+		initialAmount := 10
+		recipient := account0address
+		fundAccount0Tx := fundAccountTransactionBody(t, chain).
+			AddAuthorizer(chain.ServiceAddress()).
+			AddArgument(jsoncdc.MustEncode(cadence.UFix64(initialAmount))).
+			AddArgument(jsoncdc.MustEncode(cadence.NewAddress(recipient))).
+			// set the proposal key and sequence number for this transaction:
+			SetProposalKey(chain.ServiceAddress(), 0, sequenceNumber).
+			// service account is the payer
+			SetPayer(chain.ServiceAddress())
+		// sign the tx envelope
+		err = testutil.SignEnvelope(
+			fundAccount0Tx,
+			chain.ServiceAddress(),
+			unittest.ServiceAccountPrivateKey,
+		)
+		require.NoError(t, err)
 
 		transactions := []*flow.TransactionBody{
 			setupAccount0Tx,
 			setupAccount1Tx,
+			fundAccount0Tx,
 		}
 		collectionOfTransactions := [][]*flow.TransactionBody{transactions}
 		executableBlock := unittest.ExecutableBlockFromTransactions(collectionOfTransactions)
