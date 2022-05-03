@@ -1,7 +1,7 @@
 import FungibleToken from 0x%s
 import FlowToken from 0x%s
 
-transaction {
+transaction (tester: Address) {
 
     prepare(signer: AuthAccount) {
 
@@ -29,7 +29,7 @@ transaction {
 		// by getting the public capability and checking
 		// that it points to a valid Vault object
 		// that implements the Receiver interface
-		getAccount(0x0).getCapability<&FlowToken.Vault{FungibleToken.Receiver}>(/public/flowTokenReceiver)
+		getAccount(tester).getCapability<&FlowToken.Vault{FungibleToken.Receiver}>(/public/flowTokenReceiver)
 						.check():
 						"Vault Receiver Reference was not created correctly"
 	}

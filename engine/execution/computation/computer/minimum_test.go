@@ -3,6 +3,8 @@ package computer_test
 import (
 	"context"
 	"fmt"
+	"github.com/onflow/cadence"
+	jsoncdc "github.com/onflow/cadence/encoding/json"
 	"github.com/onflow/flow-go/engine/execution/computation/committer"
 	"github.com/onflow/flow-go/engine/execution/computation/computer"
 	executionState "github.com/onflow/flow-go/engine/execution/state"
@@ -40,6 +42,7 @@ func TestCustomBlockExecution(t *testing.T) {
 		createAccount0Tx := flow.NewTransactionBody().
 			// use basic account creation script
 			SetScript(getSetupAccountTransactionScript(t, chain)).
+			AddArgument(jsoncdc.MustEncode(cadence.NewAddress(chain.ServiceAddress()))).
 			AddAuthorizer(chain.ServiceAddress()).
 			SetProposalKey(chain.ServiceAddress(), 0, sequenceNumber).
 			SetPayer(chain.ServiceAddress())
@@ -60,9 +63,14 @@ func TestCustomBlockExecution(t *testing.T) {
 		computationResult, err := blockComputer.ExecuteBlock(context.Background(), executableBlock, view, programs.NewEmptyPrograms())
 		assert.NoError(t, err)
 		var txErrors []string
-		for _, txRes := range computationResult.TransactionResults {
-			txErrors = append(txErrors, txRes.ErrorMessage)
+		for i, txRes := range computationResult.TransactionResults {
+			// skip service transaction errors
+			if i != len(computationResult.TransactionResults)-1 {
+				txErrors = append(txErrors, txRes.ErrorMessage)
+			}
 		}
+		// it seems that the service transaction might be expected to fail
+		// https://github.com/onflow/flow-go/pull/2007/files#diff-6c545270710f8d91b58673b79d869691949eda628d6d4612b6162074237ec9dd
 		for _, e := range txErrors {
 			assert.Empty(t, e)
 		}
