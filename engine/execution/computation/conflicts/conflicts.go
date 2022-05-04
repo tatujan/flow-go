@@ -7,11 +7,13 @@ import (
 )
 
 type Conflicts struct {
-	transactions          []Transaction
-	totalRegisterTouchSet map[flow.RegisterID][]Transaction
-	dependencyGraph       map[flow.Identifier][]flow.Identifier
-	txChannel             chan Transaction
-	lock                  sync.RWMutex
+	transactions             []Transaction
+	totalRegisterTouchSet    map[flow.RegisterID][]Transaction
+	dependencyGraph          map[flow.Identifier][]flow.Identifier
+	suspendedTxDepdencyGraph map[flow.Identifier][]flow.Identifier
+	txChannel                chan Transaction
+	isConflicRoot            bool
+	lock                     sync.RWMutex
 }
 
 type Transaction struct {
@@ -31,6 +33,7 @@ func NewConflicts(txCount int) *Conflicts {
 		totalRegisterTouchSet: make(map[flow.RegisterID][]Transaction),
 		dependencyGraph:       make(map[flow.Identifier][]flow.Identifier),
 		txChannel:             make(chan Transaction, txCount),
+		isConflicRoot:         false,
 	}
 }
 
@@ -39,11 +42,17 @@ func (c *Conflicts) String() string {
 	str := ""
 	if len(c.dependencyGraph) > 0 {
 		for node, edges := range c.dependencyGraph {
-			str += node.String()
+			nodeStr := node.String()
+			str += nodeStr[len(nodeStr)-8:]
 			if len(edges) > 0 {
 				str += " -> "
 				for j := 0; j < len(edges); j++ {
-					str += edges[j].String() + " "
+					edgeStr := edges[j].String()
+					edgeStr = edgeStr[len(edgeStr)-8:]
+					str += edgeStr + " "
+					if c.isConflicRoot {
+						str += "*"
+					}
 				}
 			}
 			str += "\n"
@@ -67,6 +76,8 @@ func (c *Conflicts) TransactionCount() int {
 // ConflictCount returns the number of transactions the conflict object is aware of
 // conflicts are defined as nodes that have a directed edge to another node.
 func (c *Conflicts) ConflictCount() int {
+	//todo: Fix conflict count -> when multiple branches, each branch counted as one
+	// even tho there are multiple levels within branch.
 	count := 0
 	for _, edges := range c.dependencyGraph {
 		if len(edges) > 0 {
@@ -113,7 +124,7 @@ func (c *Conflicts) determineConflicts(tx Transaction) TransactionSet {
 			for _, transaction := range registerTouches {
 				if transaction.CollectionID != tx.CollectionID || c.isConflict(transaction.TransactionID) {
 					// if so, that transaction is a conflict. Add to list of conflicts with tx
-					conflicts.Add(transaction)
+					conflicts.Add(tx)
 				}
 			}
 			// add current tx to the list of Transactions that have touched register
@@ -130,14 +141,16 @@ func (c *Conflicts) determineConflicts(tx Transaction) TransactionSet {
 // adds those conflicts to the dependency graph
 func (c *Conflicts) addToConflictGraph(txID flow.Identifier, conflicts TransactionSet) {
 	// if the tx is not already in graph, add node
-	if !c.containsNode(txID) {
+	if !c.ContainsNode(txID) {
 		c.addNode(txID)
 	}
+	//todo: in the first conflict there is no edge to anything in STDG.
+
 	// for each transaction that conflicts with tx, add a directed edge from that conflict to tx
 	for _, conflict := range conflicts.IterableMap() {
 		// if the conflict does not already exist in the graph, add it.
 		cID := conflict.TransactionID
-		if !c.containsNode(cID) {
+		if !c.ContainsNode(cID) {
 			c.addNode(cID)
 		}
 		c.addDirectedEdge(cID, txID)
@@ -154,7 +167,7 @@ func (c *Conflicts) isConflict(txID flow.Identifier) bool {
 // Graph Operations
 // ************************************************************
 
-func (c *Conflicts) containsNode(txID flow.Identifier) bool {
+func (c *Conflicts) ContainsNode(txID flow.Identifier) bool {
 	_, inMap := c.dependencyGraph[txID]
 	return inMap
 }
@@ -163,7 +176,7 @@ func (c *Conflicts) addNode(txID flow.Identifier) error {
 	c.lock.Lock()
 	var err error
 	// check if node already exists
-	if !c.containsNode(txID) {
+	if !c.ContainsNode(txID) {
 		// if not, add it
 		c.dependencyGraph[txID] = make([]flow.Identifier, 0)
 	} else {
@@ -176,7 +189,7 @@ func (c *Conflicts) addNode(txID flow.Identifier) error {
 func (c *Conflicts) deleteNode(txID flow.Identifier) error {
 	c.lock.Lock()
 	var err error
-	if c.containsNode(txID) {
+	if c.ContainsNode(txID) {
 		//delete the node
 		delete(c.dependencyGraph, txID)
 		// delete node from all edge lists
@@ -196,7 +209,7 @@ func (c *Conflicts) addDirectedEdge(tx1, tx2 flow.Identifier) error {
 	c.lock.Lock()
 	var err error
 	// check if nodes already exist. If not return error
-	if !c.containsNode(tx1) || !c.containsNode(tx2) {
+	if !c.ContainsNode(tx1) || !c.ContainsNode(tx2) {
 		err = errors.New("Cannot add edge to a node that does not exist.")
 	} else {
 		edges := c.dependencyGraph[tx1]
@@ -216,7 +229,7 @@ func (c *Conflicts) removeDirectedEdge(tx1, tx2 flow.Identifier) error {
 	c.lock.Lock()
 	var err error
 	// check if nodes already exist. If not return error
-	if !c.containsNode(tx1) || !c.containsNode(tx2) {
+	if !c.ContainsNode(tx1) || !c.ContainsNode(tx2) {
 		err = errors.New("Cannot remove edge from a node that does not exist.")
 	} else {
 		edges := c.dependencyGraph[tx1]
