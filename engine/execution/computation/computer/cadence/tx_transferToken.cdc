@@ -8,7 +8,7 @@
 import FungibleToken from 0x%s
 import FlowToken from 0x%s
 
-transaction(amount: UFix64, to: Address) {
+transaction (amount: UFix64, to: Address, senderAddress: Address) {
 
 	// The Vault resource that holds the tokens that are being transferred
 	let sentVault: @FungibleToken.Vault
@@ -27,13 +27,30 @@ transaction(amount: UFix64, to: Address) {
 
 		// Get the recipient's public account object
 		let recipient = getAccount(to)
+		// let sender = getAccount(senderAddress)
 
 		// Get a reference to the recipient's Receiver
 		let receiverRef = recipient.getCapability(/public/flowTokenReceiver)
 			.borrow<&{FungibleToken.Receiver}>()
 			?? panic("Could not borrow receiver reference to the recipient's Vault")
 
+        let balanceRefTo =  recipient.getCapability(/public/flowTokenBalance)
+            .borrow<&{FungibleToken.Balance}>()
+                ?? panic("failed to borrow reference to recipient vault balance")
+        // let balanceRefSender =  sender.getCapability(/public/flowTokenBalance)
+            //.borrow<&{FungibleToken.Balance}>()
+                //?? panic("failed to borrow reference to sender vault balance")
+
+
+        let preBalanceTo = balanceRefTo.balance
+        //let preBalanceSender = balanceRefSender.balance
 		// Deposit the withdrawn tokens in the recipient's receiver
 		receiverRef.deposit(from: <-self.sentVault)
+	    let postBalanceTo = balanceRefTo.balance
+	    //let postBalanceSender = balanceRefSender.balance
+
+        if postBalanceTo != preBalanceTo + amount {
+            panic("Receiver balance was not transferred correctly.")
+        }
 	}
 }

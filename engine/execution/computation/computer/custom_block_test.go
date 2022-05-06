@@ -171,6 +171,7 @@ func makeAndSignTransferTokenTransaction(t *testing.T, chain flow.Chain, from fl
 		AddAuthorizer(from).
 		AddArgument(jsoncdc.MustEncode(cadence.UFix64(amount))).
 		AddArgument(jsoncdc.MustEncode(cadence.NewAddress(to))).
+		AddArgument(jsoncdc.MustEncode(cadence.NewAddress(from))).
 		// set the proposal key and sequence number for this transaction:
 		SetProposalKey(from, 0, sequenceNumber).
 		// sending account is the payer
