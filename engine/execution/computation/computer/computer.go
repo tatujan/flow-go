@@ -441,6 +441,21 @@ func (e *blockComputer) executeTransaction(
 			err)
 	}
 
+	conflictView, ok := txView.(*delta.View)
+	if ok && !isSystemChunk {
+		touchSet := conflictView.AllRegisters()
+		print("Registers touched by Transaction " + fmt.Sprint(txIndex) + ": \n")
+		print("************************************************* \n")
+		for i, register := range touchSet {
+			//print(string(register.Bytes()) + "\n")
+			print("Touch " + fmt.Sprint(i) + "\n")
+			print("Owner: " + register.Owner + "\n")
+			print("Controller: " + register.Controller + "\n")
+			print("Key: " + register.Key + "\n")
+			print("-------------" + "\n")
+		}
+	}
+
 	txResult := flow.TransactionResult{
 		TransactionID:   tx.ID,
 		ComputationUsed: tx.ComputationUsed,
